@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
 import { MongooseModule } from '@nestjs/mongoose';
+import { RepoHealth, RepoHealthSchema } from './repo-health/repo-health.model';
 import { RepoHealthController } from './repo-health/repo-health.controller';
 import { RepoHealthService } from './repo-health/repo-health.service';
-import { RepoHealth, RepoHealthSchema } from './repo-health/repo-health.model';
 import { DependencyAnalyzerService } from './repo-health/dependency-analyzer.service';
 
 @Module({

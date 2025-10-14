@@ -1,21 +1,23 @@
 import { Module } from '@nestjs/common';
+import { MongooseModule } from '@nestjs/mongoose';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { RepoHealthModule } from './repo-health/repo-health.module';
 import { UserProfileModule } from './user-profile/user-profile.module';
-import { RepoHealthService } from './repo-health/repo-health/repo-health.service';
 import { RepositoryDetailsModule } from './repository-details/repository-details.module';
-import { RepositoryDetailsService } from './repository-details/repository-details.service';
-import { RepositoryDetailsController } from './repository-details/repository-details.controller';
-import { RepoHealthController } from './repo-health/repo-health/repo-health.controller';
+import * as dotenv from 'dotenv';
+
+// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+dotenv.config();
 
 @Module({
-  imports: [RepoHealthModule, UserProfileModule, RepositoryDetailsModule],
-  controllers: [
-    AppController,
-    RepoHealthController,
-    RepositoryDetailsController,
+  imports: [
+    MongooseModule.forRoot(process.env.MONGO_URI || ''),
+    RepoHealthModule,
+    UserProfileModule,
+    RepositoryDetailsModule,
   ],
-  providers: [AppService, RepoHealthService, RepositoryDetailsService],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}

@@ -42,6 +42,9 @@ export class RepoHealth extends Document {
 
   @Prop()
   risky_dependencies: string[];
+
+  @Prop({ expires: 604800 })
+  createdAt: Date;
 }
 
 export const RepoHealthSchema = SchemaFactory.createForClass(RepoHealth);
