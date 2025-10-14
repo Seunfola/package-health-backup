@@ -42,6 +42,7 @@ export class RepoHealthService {
     repo: string,
     file?: Express.Multer.File,
     rawJson?: string,
+    token?: string, // optional GitHub token
   ) {
     // 1️⃣ Fetch GitHub repo data
     const githubApiUrl = `https://api.github.com/repos/${owner}/${repo}`;
@@ -57,9 +58,9 @@ export class RepoHealthService {
       );
     }
 
-    // 2️⃣ Fetch commit activity & security alerts
+    // 2️⃣ Fetch commit activity & security alerts (pass token here)
     const commitActivity = await this.fetchCommitActivity(owner, repo);
-    const securityAlerts = await this.fetchSecurityAlerts(owner, repo);
+    const securityAlerts = await this.fetchSecurityAlerts(owner, repo, token);
 
     // 3️⃣ Analyze dependencies if package.json is provided
     let dependencyHealth = 100;
@@ -125,8 +126,10 @@ export class RepoHealthService {
     url: string,
     file?: Express.Multer.File,
     rawJson?: string,
+    token?: string,
   ) {
-    const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
+    const match = url.match(/github\.com\/([^/]+)\/([^/]+)(?:\.git|\/)?/);
+
     if (!match) {
       throw new HttpException(
         'Invalid GitHub URL provided.',
@@ -134,7 +137,7 @@ export class RepoHealthService {
       );
     }
     const [, owner, repo] = match;
-    return this.analyzeRepo(owner, repo, file, rawJson);
+    return this.analyzeRepo(owner, repo, file, rawJson, token);
   }
 
   /** 📊 Fetch commit activity (last 52 weeks) */
@@ -172,16 +175,24 @@ export class RepoHealthService {
   private async fetchSecurityAlerts(
     owner: string,
     repo: string,
+    token?: string, // optional user token
   ): Promise<any[]> {
     try {
       const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
+      const headers: Record<string, string> = {
+        Accept:
+          'application/vnd.github+json, application/vnd.github+vuln-preview+json',
+      };
+
+      // Use user-provided token if available, otherwise fallback to server token
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      } else if (process.env.GITHUB_TOKEN) {
+        headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+      }
+
       const response = await lastValueFrom(
-        this.httpService.get(url, {
-          headers: {
-            Accept: 'application/vnd.github+json',
-            // Authorization: `Bearer ${process.env.GITHUB_TOKEN}`, // needed for private repos
-          },
-        }),
+        this.httpService.get(url, { headers }),
       );
       return Array.isArray(response.data) ? response.data : [];
     } catch {

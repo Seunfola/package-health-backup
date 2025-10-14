@@ -16,94 +16,73 @@ import { RepoHealthService } from './repo-health.service';
 export class RepoHealthController {
   constructor(private readonly repoHealthService: RepoHealthService) {}
 
-  /** 🔍 Full repo analysis: GitHub URL + optional package.json */
-  @Post('analyze-full')
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiOperation({
-    summary:
-      'Analyze GitHub repository + optional package.json (upload or paste)',
-  })
-  @ApiConsumes('multipart/form-data')
+  /** 🔍 Analyze GitHub repo by URL */
+  @Post('analyze-url')
+  @ApiOperation({ summary: 'Analyze a repository by GitHub URL' })
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
         url: { type: 'string', example: 'https://github.com/nestjs/nest' },
-        file: {
-          type: 'string',
-          format: 'binary',
-          description: 'Optional package.json file',
-        },
-        json: {
-          type: 'string',
-          description: 'Optional pasted package.json content',
-        },
+        token: { type: 'string', example: 'ghp_xxx' },
       },
       required: ['url'],
     },
   })
-  async analyzeFullRepo(
-    @Body('url') url: string,
-    @UploadedFile() file?: Express.Multer.File,
-    @Body('json') json?: string,
-  ) {
+  async analyzeByUrl(@Body() body: { url: string; token?: string }) {
+    const { url, token } = body;
     if (!url) {
       throw new HttpException('GitHub URL is required', HttpStatus.BAD_REQUEST);
     }
-
     try {
-      return await this.repoHealthService.analyzeByUrl(url, file, json);
+      return await this.repoHealthService.analyzeByUrl(
+        url,
+        undefined,
+        undefined,
+        token,
+      );
     } catch (err: unknown) {
       const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'string'
-            ? err
-            : 'Unexpected error occurred';
+        err instanceof Error ? err.message : 'Unexpected error occurred';
       throw new HttpException(message, HttpStatus.BAD_REQUEST);
     }
   }
 
-  /** 📦 Analyze uploaded package.json only (dependency analysis) */
+  /** 📦 Analyze uploaded package.json only */
   @Post('analyze-package/upload')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({ summary: 'Analyze uploaded package.json file' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary' },
+      },
+      required: ['file'],
+    },
+  })
   async analyzeUploadedPackage(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
       throw new HttpException('No file uploaded', HttpStatus.BAD_REQUEST);
     }
-
     try {
       return await this.repoHealthService.analyzePackageJson(file);
     } catch (err: unknown) {
       const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'string'
-            ? err
-            : 'Unexpected error occurred';
+        err instanceof Error ? err.message : 'Unexpected error occurred';
       throw new HttpException(message, HttpStatus.BAD_REQUEST);
     }
   }
 
-  /** 🧾 Analyze pasted package.json only (dependency analysis) */
+  /** 🧾 Analyze pasted package.json content only */
   @Post('analyze-package/paste')
   @ApiOperation({ summary: 'Analyze pasted package.json content' })
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
-        json: {
-          type: 'string',
-          description: 'Raw package.json content as text',
-          example: `{
-            "name": "my-app",
-            "dependencies": {
-              "react": "^18.2.0",
-              "nestjs": "^10.0.0"
-            }
-          }`,
-        },
+        json: { type: 'string', description: 'Raw package.json content' },
       },
       required: ['json'],
     },
@@ -112,16 +91,11 @@ export class RepoHealthController {
     if (!json) {
       throw new HttpException('No JSON provided', HttpStatus.BAD_REQUEST);
     }
-
     try {
       return await this.repoHealthService.analyzePackageJson(undefined, json);
     } catch (err: unknown) {
       const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'string'
-            ? err
-            : 'Unexpected error occurred';
+        err instanceof Error ? err.message : 'Unexpected error occurred';
       throw new HttpException(message, HttpStatus.BAD_REQUEST);
     }
   }
@@ -147,16 +121,11 @@ export class RepoHealthController {
         HttpStatus.BAD_REQUEST,
       );
     }
-
     try {
       return await this.repoHealthService.findRepoHealth(owner, repo);
     } catch (err: unknown) {
       const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === 'string'
-            ? err
-            : 'Unexpected error occurred';
+        err instanceof Error ? err.message : 'Unexpected error occurred';
       throw new HttpException(message, HttpStatus.BAD_REQUEST);
     }
   }
