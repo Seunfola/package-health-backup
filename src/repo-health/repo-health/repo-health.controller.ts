@@ -11,6 +11,16 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { RepoHealthService } from './repo-health.service';
 
+interface UrlBody {
+  url: string;
+  token?: string;
+}
+
+interface OwnerRepoBody {
+  owner: string;
+  repo: string;
+}
+
 @ApiTags('repo-health')
 @Controller('repo-health')
 export class RepoHealthController {
@@ -29,7 +39,7 @@ export class RepoHealthController {
       required: ['url'],
     },
   })
-  async analyzeByUrl(@Body() body: { url: string; token?: string }) {
+  async analyzeByUrl(@Body() body: UrlBody) {
     const { url, token } = body;
     if (!url) {
       throw new HttpException('GitHub URL is required', HttpStatus.BAD_REQUEST);
@@ -48,29 +58,43 @@ export class RepoHealthController {
     }
   }
 
-  /** 📦 Analyze uploaded package.json only */
   @Post('analyze-package/upload')
   @UseInterceptors(FileInterceptor('file'))
-  @ApiOperation({ summary: 'Analyze uploaded package.json file' })
+  @ApiOperation({
+    summary: 'Analyze uploaded package.json, package-lock.json, or folder zip',
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
       type: 'object',
-      properties: {
-        file: { type: 'string', format: 'binary' },
-      },
+      properties: { file: { type: 'string', format: 'binary' } },
       required: ['file'],
     },
   })
-  async analyzeUploadedPackage(@UploadedFile() file: Express.Multer.File) {
+  async analyzeUploadedPackage(@UploadedFile() file?: Express.Multer.File) {
     if (!file) {
       throw new HttpException('No file uploaded', HttpStatus.BAD_REQUEST);
     }
+
     try {
-      return await this.repoHealthService.analyzePackageJson(file);
+      // Extract dependencies from uploaded file (supports zip + single file)
+      const deps = this.repoHealthService['_getDependenciesFromFile'](file);
+
+      // Analyze dependencies locally (no GitHub API)
+      const analysis = await this.repoHealthService.analyzeJson(
+        JSON.stringify({ dependencies: deps }),
+      );
+
+      return {
+        project_name: file.originalname,
+        dependencies: deps,
+        dependency_health: analysis.dependency_health,
+        risky_dependencies: analysis.risky_dependencies,
+        outdated_dependencies: analysis.outdated_dependencies,
+        // unstable_dependencies is not available on the analysis result type
+      };
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Unexpected error occurred';
+      const message = err instanceof Error ? err.message : String(err);
       throw new HttpException(message, HttpStatus.BAD_REQUEST);
     }
   }
@@ -91,11 +115,11 @@ export class RepoHealthController {
     if (!json) {
       throw new HttpException('No JSON provided', HttpStatus.BAD_REQUEST);
     }
+
     try {
-      return await this.repoHealthService.analyzePackageJson(undefined, json);
+      return await this.repoHealthService.analyzeJson(json);
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Unexpected error occurred';
+      const message = err instanceof Error ? err.message : String(err);
       throw new HttpException(message, HttpStatus.BAD_REQUEST);
     }
   }
@@ -106,14 +130,11 @@ export class RepoHealthController {
   @ApiBody({
     schema: {
       type: 'object',
-      properties: {
-        owner: { type: 'string', example: 'nestjs' },
-        repo: { type: 'string', example: 'nest' },
-      },
+      properties: { owner: { type: 'string' }, repo: { type: 'string' } },
       required: ['owner', 'repo'],
     },
   })
-  async fetchStoredRepo(@Body() body: { owner: string; repo: string }) {
+  async fetchStoredRepo(@Body() body: OwnerRepoBody) {
     const { owner, repo } = body;
     if (!owner || !repo) {
       throw new HttpException(

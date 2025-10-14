@@ -6,14 +6,23 @@ import { RepoHealthModule } from './repo-health/repo-health.module';
 import { UserProfileModule } from './user-profile/user-profile.module';
 import { RepositoryDetailsModule } from './repository-details/repository-details.module';
 import * as dotenv from 'dotenv';
+import { AuthModule } from './auth/auth.module';
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
 dotenv.config();
+
+if (!process.env.MONGO_URI) {
+  throw new Error('MONGO_URI is not defined in your environment variables');
+}
 
 @Module({
   imports: [
-    MongooseModule.forRoot(process.env.MONGO_URI || ''),
+    // Mongoose setup with updated options
+    MongooseModule.forRoot(process.env.MONGO_URI, {
+      retryWrites: true,
+      serverSelectionTimeoutMS: 5000,
+    }),
     RepoHealthModule,
+    AuthModule,
     UserProfileModule,
     RepositoryDetailsModule,
   ],
