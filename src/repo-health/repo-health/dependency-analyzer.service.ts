@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
-import { lastValueFrom } from 'rxjs';
+import { lastValueFrom, retry, catchError, throwError } from 'rxjs';
+import { AxiosResponse } from 'axios';
+
+interface NpmResponse {
+  'dist-tags'?: { latest?: string };
+}
 
 @Injectable()
 export class DependencyAnalyzerService {
@@ -8,9 +13,26 @@ export class DependencyAnalyzerService {
 
   constructor(private readonly httpService: HttpService) {}
 
+  /** Safely extract error message from unknown value */
+  private extractErrorMessage(error: unknown): string {
+    if (error instanceof Error && typeof error.message === 'string') {
+      return error.message;
+    }
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'message' in error &&
+      typeof (error as Record<string, unknown>).message === 'string'
+    ) {
+      return (error as Record<string, string>).message;
+    }
+    return String(error);
+  }
+
+  /** Analyze dependencies from a package.json dependency map */
   async analyzeDependencies(dependencies: Record<string, string>) {
     const entries = Object.entries(dependencies ?? {});
-    if (!entries.length) {
+    if (entries.length === 0) {
       return { score: 100, risky: [], outdated: [] };
     }
 
@@ -18,11 +40,18 @@ export class DependencyAnalyzerService {
       entries.map(async ([pkg, version]) => {
         try {
           const url = `https://registry.npmjs.org/${encodeURIComponent(pkg)}`;
-          const response = await lastValueFrom(this.httpService.get(url));
-          const data = (response?.data ?? {}) as {
-            'dist-tags'?: { latest?: string };
-          };
+          const response: AxiosResponse<NpmResponse> = await lastValueFrom(
+            this.httpService.get<NpmResponse>(url).pipe(
+              retry({ count: 2, delay: 500 }),
+              catchError((err: unknown) => {
+                const message = this.extractErrorMessage(err);
+                this.logger.warn(`Fetch failed for ${pkg}: ${message}`);
+                return throwError(() => err);
+              }),
+            ),
+          );
 
+          const data = response?.data ?? {};
           const latestVersion = data['dist-tags']?.latest ?? null;
           const currentVersion = (version || '').replace(/^[^\d]*/, '');
 
@@ -33,10 +62,11 @@ export class DependencyAnalyzerService {
             pkg,
             current: currentVersion,
             latest: latestVersion,
-            outdated: isOutdated,
+            outdated: Boolean(isOutdated),
           };
-        } catch (error) {
-          this.logger.warn(`Failed to fetch ${pkg} info: ${error}`);
+        } catch (error: unknown) {
+          const message = this.extractErrorMessage(error);
+          this.logger.warn(`Failed to analyze ${pkg}: ${message}`);
           return { pkg, error: true };
         }
       }),
@@ -64,10 +94,10 @@ export class DependencyAnalyzerService {
       )
       .map((r) => r.value.pkg);
 
-    const score = Math.max(
-      100 - outdated.length * 2 - risky.length * 3 - entries.length / 20,
-      0,
-    );
+    // Weighted scoring model
+    const basePenalty =
+      outdated.length * 2 + risky.length * 3 + entries.length / 20;
+    const score = Math.max(100 - basePenalty, 0);
 
     return {
       score: Number(score.toFixed(1)),
