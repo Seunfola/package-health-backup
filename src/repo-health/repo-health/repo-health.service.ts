@@ -215,12 +215,16 @@ export class RepoHealthService {
     return {
       project_name: projectName,
       total_dependencies: totalDependencies,
-      dependency_health:
-        typeof analysis?.score === 'number' ? analysis.score : 100,
-      risky_dependencies: Array.isArray(analysis?.risky) ? analysis.risky : [],
-      outdated_dependencies: Array.isArray(analysis?.outdated)
-        ? analysis.outdated
-        : [],
+      dependencies: deps,
+      dependency_health: {
+        score: analysis.score,
+        health: analysis.health,
+        total_vulnerabilities: analysis.totalVulns ?? 0,
+        total_outdated: analysis.totalOutdated ?? 0,
+      },
+      risky_dependencies: analysis.risky ?? [],
+      outdated_dependencies: analysis.outdated ?? [],
+      unstable_dependencies: analysis.unstable ?? [],
     };
   }
 

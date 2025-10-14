@@ -54,7 +54,6 @@ export class DependencyAnalyzerService {
     );
 
     try {
-      // 1️⃣ Install dependencies (timeout + optional Docker)
       await this.safeExec(
         'npm install --ignore-scripts --silent',
         tempDir,
@@ -62,23 +61,10 @@ export class DependencyAnalyzerService {
         useDocker,
       );
 
-      // 2️⃣ Run npm outdated
-      const outdated = await this.safeJsonExec(
-        'npm outdated --json',
-        tempDir,
-        60_000,
-        useDocker,
-      );
-
-      // 3️⃣ Run npm audit
-      const auditResult = await this.safeJsonExec(
-        'npm audit --json',
-        tempDir,
-        60_000,
-        useDocker,
-      );
-
-      // 4️⃣ Analyze results
+      const [outdated, auditResult] = await Promise.all([
+  this.safeJsonExec('npm outdated --json', tempDir, 60000, useDocker),
+  this.safeJsonExec('npm audit --json', tempDir, 60000, useDocker),
+]);
       const vulnerabilities = this.extractVulnerabilities(auditResult);
       const risky = Object.keys(vulnerabilities);
       const outdatedList = this.extractOutdated(outdated);
@@ -112,11 +98,16 @@ export class DependencyAnalyzerService {
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+  try {
+    await fs.remove(tempDir);
+  } catch (err: any) {
+    if (err.code === 'EBUSY') {
+      await new Promise((r) => setTimeout(r, 200));
+      await fs.remove(tempDir);
     }
   }
+}
 
-  // 🧩 Safe exec with timeout and optional Docker
   private async safeExec(
     command: string,
     cwd: string,
@@ -130,7 +121,6 @@ export class DependencyAnalyzerService {
     return execAsync(wrapped, { cwd, timeout });
   }
 
-  // 🧩 Safe JSON exec wrapper
   private async safeJsonExec(
     command: string,
     cwd: string,
@@ -153,7 +143,6 @@ export class DependencyAnalyzerService {
     }
   }
 
-  /** 🔍 Extract vulnerabilities from audit results */
   private extractVulnerabilities(auditJson: Record<string, unknown>) {
     const result: Record<string, { severity: string; via: string[] }> = {};
     let vulns: Record<string, unknown> = {};
@@ -203,7 +192,6 @@ export class DependencyAnalyzerService {
     return result;
   }
 
-  /** 🧮 Extract outdated dependencies */
   private extractOutdated(outdatedJson: Record<string, any>) {
     const list: { name: string; current: string; latest: string }[] = [];
 
@@ -225,7 +213,6 @@ export class DependencyAnalyzerService {
     return list;
   }
 
-  /** ⚖️ Compute dependency health score */
   private calculateHealthScore(
     vulnerabilities: Record<string, any>,
     outdated: any[],
@@ -243,7 +230,6 @@ export class DependencyAnalyzerService {
     return { score, health, totalVulns, totalOutdated };
   }
 
-  /** 🔎 Detect unstable (alpha/beta/rc) versions */
   private detectUnstableDeps(deps: Record<string, string>) {
     return Object.entries(deps)
       .filter(([, version]) => /alpha|beta|rc|snapshot|next/i.test(version))
