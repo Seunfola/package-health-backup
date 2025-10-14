@@ -58,10 +58,11 @@ export class RepoHealthController {
     }
   }
 
-  /** 📦 Analyze uploaded package.json only */
   @Post('analyze-package/upload')
   @UseInterceptors(FileInterceptor('file'))
-  @ApiOperation({ summary: 'Analyze uploaded package.json file' })
+  @ApiOperation({
+    summary: 'Analyze uploaded package.json, package-lock.json, or folder zip',
+  })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -76,8 +77,22 @@ export class RepoHealthController {
     }
 
     try {
-      // Use analyzeRepo with dummy owner/repo for local files
-      return await this.repoHealthService.analyzeRepo('local', 'local', file);
+      // Extract dependencies from uploaded file (supports zip + single file)
+      const deps = this.repoHealthService['_getDependenciesFromFile'](file);
+
+      // Analyze dependencies locally (no GitHub API)
+      const analysis = await this.repoHealthService.analyzeJson(
+        JSON.stringify({ dependencies: deps }),
+      );
+
+      return {
+        project_name: file.originalname,
+        dependencies: deps,
+        dependency_health: analysis.dependency_health,
+        risky_dependencies: analysis.risky_dependencies,
+        outdated_dependencies: analysis.outdated_dependencies,
+        // unstable_dependencies is not available on the analysis result type
+      };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       throw new HttpException(message, HttpStatus.BAD_REQUEST);

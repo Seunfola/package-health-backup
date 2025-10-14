@@ -7,6 +7,7 @@ import { DependencyAnalyzerService } from './dependency-analyzer.service';
 import { RepoHealth, RepoHealthDocument } from './repo-health.model';
 import AdmZip from 'adm-zip';
 import path from 'path';
+import fs from 'fs';
 
 interface GitHubRepoResponse {
   name: string;
@@ -22,16 +23,59 @@ interface CommitActivityItem {
   total: number;
 }
 
+type CacheEntry<T> = { createdAt: number; ttlMs: number; value: T };
+
+class Semaphore {
+  private queue: Array<() => void> = [];
+  private counter: number = 0;
+  constructor(private readonly max: number) {}
+  async acquire(): Promise<() => void> {
+    if (this.counter < this.max) {
+      this.counter++;
+      return () => {
+        this.counter--;
+        const next = this.queue.shift();
+        if (next) next();
+      };
+    }
+    return new Promise<() => void>((resolve) => {
+      this.queue.push(() => {
+        this.counter++;
+        resolve(() => {
+          this.counter--;
+          const next = this.queue.shift();
+          if (next) next();
+        });
+      });
+    });
+  }
+}
+
 @Injectable()
 export class RepoHealthService {
+  private readonly analysisSemaphore = new Semaphore(4);
+
+  private readonly cache = new Map<string, CacheEntry<unknown>>();
+
+  private readonly dockerAvailable: boolean;
+
   constructor(
     @InjectModel(RepoHealth.name)
     private readonly repoHealthModel: Model<RepoHealthDocument>,
     private readonly httpService: HttpService,
     private readonly dependencyAnalyzer: DependencyAnalyzerService,
-  ) {}
+  ) {
+    this.dockerAvailable = this.detectDocker();
+  }
 
-  /** 🔍 Fetch stored repo health info from MongoDB */
+  private detectDocker(): boolean {
+    try {
+      return fs.existsSync('/var/run/docker.sock');
+    } catch {
+      return false;
+    }
+  }
+
   async findRepoHealth(owner: string, repo: string) {
     const record = await this.repoHealthModel.findOne({ owner, repo }).exec();
     if (!record) {
@@ -43,45 +87,45 @@ export class RepoHealthService {
     return record.toObject();
   }
 
-  /** 🌐 Analyze GitHub repo by owner/repo, optionally with package.json file or pasted JSON */
   async analyzeRepo(
     owner: string,
     repo: string,
     file?: Express.Multer.File,
-    rawJson?: string | Record<string, any>,
+    rawJson?: string | Record<string, unknown>,
     token?: string,
   ) {
-    const headers: Record<string, string> = {
-      Accept: 'application/vnd.github+json',
-    };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const githubApiUrl = `https://api.github.com/repos/${owner}/${repo}`;
-    let data: GitHubRepoResponse;
+    // fetch metadata with retries and caching
+    const repoKey = `repo:${owner}/${repo}`;
+    const repoData = await this.requestWithCache<GitHubRepoResponse>(
+      repoKey,
+      () => this.fetchRepo(owner, repo, token),
+      1000 * 60 * 5, // 5m cache
+    );
 
-    try {
-      const response = await lastValueFrom(
-        this.httpService.get<GitHubRepoResponse>(githubApiUrl, { headers }),
-      );
-      data = response.data;
-    } catch {
-      throw new HttpException(
-        'Failed to fetch repository data from GitHub',
-        HttpStatus.BAD_GATEWAY,
-      );
-    }
+    // fetch commit activity and alerts (also cached briefly)
+    const commitActivity = await this.requestWithCache<CommitActivityItem[]>(
+      `commits:${owner}/${repo}`,
+      () => this.fetchCommitActivity(owner, repo, token),
+      1000 * 60 * 3, // 3m
+    );
 
-    const commitActivity = await this.fetchCommitActivity(owner, repo, token);
-    const securityAlerts = await this.fetchSecurityAlerts(owner, repo, token);
+    const securityAlerts = await this.requestWithCache<any[]>(
+      `alerts:${owner}/${repo}`,
+      () => this.fetchSecurityAlerts(owner, repo, token),
+      1000 * 60 * 3,
+    );
 
+    // process dependencies (file/rawJson)
     const { dependencyHealth, riskyDependencies } =
-      await this.processDependencies(file, rawJson);
+      await this._processDependencies(file, rawJson, this.dockerAvailable);
 
-    const overallHealth = this.calculateHealthScore(
-      data,
+    const overallHealth = this._calculateHealthScore(
+      repoData,
       commitActivity,
       securityAlerts,
       dependencyHealth,
     );
+
     const repo_id = `${owner}/${repo}`;
 
     const updated = await this.repoHealthModel.findOneAndUpdate(
@@ -90,13 +134,13 @@ export class RepoHealthService {
         repo_id,
         owner,
         repo,
-        name: data.name,
-        stars: data.stargazers_count,
-        forks: data.forks_count,
-        open_issues: data.open_issues_count,
-        last_pushed: new Date(data.pushed_at),
+        name: repoData.name,
+        stars: repoData.stargazers_count,
+        forks: repoData.forks_count,
+        open_issues: repoData.open_issues_count,
+        last_pushed: new Date(repoData.pushed_at),
         commit_activity: Array.isArray(commitActivity)
-          ? (commitActivity as Array<{ total: number }>).map((c) =>
+          ? commitActivity.map((c) =>
               typeof c.total === 'number' ? c.total : 0,
             )
           : [],
@@ -113,12 +157,11 @@ export class RepoHealthService {
     return updated.toObject();
   }
 
-  /** Public wrappers so other parts of the app can call these helpers if needed */
   async processDependencies(
     file?: Express.Multer.File,
-    rawJson?: string | Record<string, any>,
+    rawJson?: string | Record<string, unknown>,
   ): Promise<{ dependencyHealth: number; riskyDependencies: string[] }> {
-    return this._processDependencies(file, rawJson);
+    return this._processDependencies(file, rawJson, this.dockerAvailable);
   }
 
   async getCommitActivity(owner: string, repo: string, token?: string) {
@@ -143,11 +186,10 @@ export class RepoHealthService {
     );
   }
 
-  /** 🌐 Analyze by GitHub URL */
   async analyzeByUrl(
     url: string,
     file?: Express.Multer.File,
-    rawJson?: string | Record<string, any>,
+    rawJson?: string | Record<string, unknown>,
     token?: string,
   ) {
     const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
@@ -158,24 +200,17 @@ export class RepoHealthService {
     return this.analyzeRepo(owner, repo, file, rawJson, token);
   }
 
-  /** 📦 Analyze pasted JSON directly */
   async analyzeJson(rawJson: string | Record<string, unknown>) {
     const parsed = this._parseJson(rawJson);
     const deps = this._extractDependencies(parsed) ?? {};
     const analysis = await this.dependencyAnalyzer.analyzeDependencies(deps);
 
     let projectName = 'unknown';
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      'name' in parsed &&
-      typeof parsed.name === 'string'
-    ) {
-      projectName = (parsed as Record<string, string>).name;
+    if ('name' in parsed && typeof parsed.name === 'string') {
+      projectName = parsed.name;
     }
 
-    const totalDependencies =
-      typeof deps === 'object' && deps !== null ? Object.keys(deps).length : 0;
+    const totalDependencies = Object.keys(deps).length;
 
     return {
       project_name: projectName,
@@ -189,153 +224,99 @@ export class RepoHealthService {
     };
   }
 
-  /** Internal implementation of dependency processing */
   private async _processDependencies(
     file?: Express.Multer.File,
-    rawJson?: string | Record<string, any>,
+    rawJson?: string | Record<string, unknown>,
+    useDocker = false,
   ): Promise<{ dependencyHealth: number; riskyDependencies: string[] }> {
     let deps: Record<string, string> = {};
 
-    try {
-      if (rawJson) {
-        deps = this._getDependenciesFromJson(rawJson);
-      } else if (file) {
-        deps = this._getDependenciesFromFile(file);
-      }
+    if (rawJson) {
+      deps = this._getDependenciesFromJson(rawJson);
+    } else if (file) {
+      deps = this._getDependenciesFromFile(file);
+    }
 
-      if (Object.keys(deps).length > 0) {
-        const analysis =
-          await this.dependencyAnalyzer.analyzeDependencies(deps);
-        return {
-          dependencyHealth: analysis?.score ?? 100,
-          riskyDependencies: Array.isArray(analysis?.risky)
-            ? analysis.risky
-            : [],
-        };
-      }
-    } catch (error) {
-      if (error instanceof HttpException) throw error;
-      throw new HttpException(
-        'Failed to parse dependencies from the provided source.',
-        HttpStatus.BAD_REQUEST,
+    if (!deps || Object.keys(deps).length === 0) {
+      return { dependencyHealth: 100, riskyDependencies: [] };
+    }
+
+    const release = await this.analysisSemaphore.acquire();
+    try {
+      const analysis = await this.dependencyAnalyzer.analyzeDependencies(
+        deps,
+        useDocker ? { useDocker } : undefined,
       );
+      return {
+        dependencyHealth:
+          typeof analysis?.score === 'number' ? analysis.score : 100,
+        riskyDependencies: Array.isArray(analysis?.risky) ? analysis.risky : [],
+      };
+    } finally {
+      release();
     }
-
-    return { dependencyHealth: 100, riskyDependencies: [] };
   }
 
-  /** Helper to get dependencies from a raw JSON string or object */
-  private _getDependenciesFromJson(
-    rawJson: string | Record<string, any>,
-  ): Record<string, string> {
-    const parsed = this._parseJson(rawJson);
-    return this._extractDependencies(parsed);
+  /** Safe fetching helpers with small in-memory cache + retry/backoff */
+  private async requestWithCache<T>(
+    key: string,
+    fn: () => Promise<T>,
+    ttlMs = 60_000,
+  ): Promise<T> {
+    const existing = this.cache.get(key) as CacheEntry<T> | undefined;
+    const now = Date.now();
+    if (existing && now - existing.createdAt < existing.ttlMs) {
+      return existing.value;
+    }
+    const value = await this.requestWithRetry(fn, 3, 300);
+    this.cache.set(key, { createdAt: now, ttlMs, value });
+    return value;
   }
 
-  /** Helper to get dependencies from an uploaded file (zip or package.json) */
-  private _getDependenciesFromFile(
-    file: Express.Multer.File,
-  ): Record<string, string> {
-    const isZip =
-      file.mimetype === 'application/zip' || file.originalname.endsWith('.zip');
-
-    if (isZip) {
+  private async requestWithRetry<T>(
+    fn: () => Promise<T>,
+    attempts = 3,
+    baseDelayMs = 300,
+  ): Promise<T> {
+    let lastErr: unknown = null;
+    for (let i = 0; i < attempts; i++) {
       try {
-        const zip = new AdmZip(file.buffer);
-        const entries = zip.getEntries();
-
-        const pkgEntry = Array.isArray(entries)
-          ? entries.find(
-              (e): e is import('adm-zip').IZipEntry =>
-                typeof e === 'object' &&
-                e !== null &&
-                'entryName' in e &&
-                typeof e.entryName === 'string' &&
-                path.basename(e.entryName) === 'package.json' &&
-                !e.isDirectory,
-            )
-          : undefined;
-
-        if (pkgEntry && typeof pkgEntry.getData === 'function') {
-          const buffer = pkgEntry.getData();
-          if (!Buffer.isBuffer(buffer)) {
-            throw new HttpException(
-              'Failed to read package.json from zip: not a valid file.',
-              HttpStatus.BAD_REQUEST,
-            );
-          }
-          const content = buffer.toString('utf-8');
-          return this._getDependenciesFromJson(content);
-        }
-
-        return {};
-      } catch {
-        throw new HttpException(
-          'Failed to read or parse the zip file.',
-          HttpStatus.BAD_REQUEST,
-        );
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        const delay = baseDelayMs * Math.pow(2, i);
+        await new Promise((res) => setTimeout(res, delay));
       }
     }
-
-    if (file.originalname.endsWith('package.json')) {
-      const content = file.buffer.toString('utf-8');
-      return this._getDependenciesFromJson(content);
+    if (lastErr instanceof Error) {
+      throw lastErr;
+    } else {
+      throw new Error('request failed');
     }
-
-    throw new HttpException(
-      'Unsupported file type. Please upload a package.json or a zip file.',
-      HttpStatus.BAD_REQUEST,
-    );
   }
 
-  /** Helper to safely parse a JSON string or return an object */
-  private _parseJson(
-    rawJson: string | Record<string, unknown>,
-  ): Record<string, unknown> {
+  private async fetchRepo(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<GitHubRepoResponse> {
     try {
-      const parsed: unknown =
-        typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
-
-      if (
-        typeof parsed !== 'object' ||
-        parsed === null ||
-        Array.isArray(parsed)
-      ) {
-        throw new Error('Invalid JSON structure');
-      }
-
-      return parsed as Record<string, unknown>;
+      const headers: Record<string, string> = {
+        Accept: 'application/vnd.github+json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const url = `https://api.github.com/repos/${owner}/${repo}`;
+      const res = await lastValueFrom(
+        this.httpService.get<GitHubRepoResponse>(url, { headers }),
+      );
+      return res.data;
     } catch {
       throw new HttpException(
-        'Invalid JSON format. Must be a non-null object.',
-        HttpStatus.BAD_REQUEST,
+        'Failed to fetch repository data from GitHub',
+        HttpStatus.BAD_GATEWAY,
       );
     }
   }
-
-  /** Helper to extract dependencies and devDependencies from a parsed package.json object */
-  private _extractDependencies(
-    packageJson: Record<string, unknown>,
-  ): Record<string, string> {
-    const deps: Record<string, string> = {};
-
-    const addDeps = (source: unknown) => {
-      if (typeof source === 'object' && source !== null) {
-        for (const [key, value] of Object.entries(source)) {
-          if (typeof value === 'string') {
-            deps[key] = value;
-          }
-        }
-      }
-    };
-
-    addDeps(packageJson.dependencies);
-    addDeps(packageJson.devDependencies);
-
-    return deps;
-  }
-
-  /** 📊 Fetch commit activity for the last 52 weeks */
 
   private async fetchCommitActivity(
     owner: string,
@@ -347,28 +328,26 @@ export class RepoHealthService {
         Accept: 'application/vnd.github+json',
       };
       if (token) headers['Authorization'] = `Bearer ${token}`;
-
       const url = `https://api.github.com/repos/${owner}/${repo}/stats/commit_activity`;
-      const response = await lastValueFrom(
+      const res = await lastValueFrom(
         this.httpService.get<unknown>(url, { headers }),
       );
-
-      if (response.status === 202) {
-        return [];
-      }
-
-      const data = response.data;
+      if (res.status === 202) return [];
+      const data = res.data;
       if (!Array.isArray(data)) return [];
-
-      return data.map((item) => {
+      return data.map((item: any) => {
         if (
           typeof item === 'object' &&
           item !== null &&
-          typeof (item as Record<string, unknown>).week === 'number' &&
-          typeof (item as Record<string, unknown>).total === 'number'
+          'week' in item &&
+          'total' in item &&
+          typeof (item as { week: unknown }).week === 'number' &&
+          typeof (item as { total: unknown }).total === 'number'
         ) {
-          const obj = item as { week: number; total: number };
-          return { week: obj.week, total: obj.total };
+          return {
+            week: (item as { week: number }).week,
+            total: (item as { total: number }).total,
+          };
         }
         return { week: 0, total: 0 };
       });
@@ -377,32 +356,175 @@ export class RepoHealthService {
     }
   }
 
-  /** 🛡 Fetch security vulnerability alerts */
   private async fetchSecurityAlerts(
     owner: string,
     repo: string,
     token?: string,
-  ) {
+  ): Promise<any[]> {
     try {
       const headers: Record<string, string> = {
         Accept: 'application/vnd.github.v3+json',
       };
       if (token) headers['Authorization'] = `Bearer ${token}`;
       const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
-      const response = await lastValueFrom(
-        this.httpService.get(url, { headers }),
-      );
-
-      if (response.status === 204) return [true];
-      if (response.status === 404) return [];
-
+      const res = await lastValueFrom(this.httpService.get(url, { headers }));
+      if (res.status === 204) return [true];
+      if (res.status === 404) return [];
       return [];
     } catch {
       return [];
     }
   }
 
-  /** ⚖️ Calculate a weighted, holistic repo health score */
+  private _parseJson(
+    rawJson: string | Record<string, unknown>,
+  ): Record<string, unknown> {
+    try {
+      const parsed: unknown =
+        typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
+        throw new Error('Invalid JSON structure');
+      }
+      return parsed as Record<string, unknown>;
+    } catch {
+      throw new HttpException(
+        'Invalid JSON format. Must be a non-null object.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+  }
+
+  private _extractDependencies(
+    packageJson: Record<string, unknown>,
+  ): Record<string, string> {
+    const deps: Record<string, string> = {};
+    const addDeps = (source: unknown) => {
+      if (typeof source === 'object' && source !== null) {
+        for (const [key, value] of Object.entries(
+          source as Record<string, unknown>,
+        )) {
+          if (typeof value === 'string') deps[key] = value;
+        }
+      }
+    };
+    addDeps(packageJson.dependencies);
+    addDeps(packageJson.devDependencies);
+    return deps;
+  }
+
+  private _getDependenciesFromJson(
+    rawJson: string | Record<string, unknown>,
+    isLockFile = false,
+  ): Record<string, string> {
+    const parsed = this._parseJson(rawJson);
+
+    if (isLockFile) {
+      const deps: Record<string, string> = {};
+      const extractDeps = (packages: unknown) => {
+        if (typeof packages !== 'object' || packages === null) return;
+
+        for (const [name, info] of Object.entries(
+          packages as Record<string, unknown>,
+        )) {
+          if (
+            typeof info === 'object' &&
+            info !== null &&
+            'version' in info &&
+            typeof (info as { version?: unknown }).version === 'string'
+          ) {
+            deps[name] = (info as { version: string }).version;
+            if (
+              'dependencies' in info &&
+              typeof (info as { dependencies?: unknown }).dependencies ===
+                'object' &&
+              (info as { dependencies?: unknown }).dependencies !== null
+            ) {
+              extractDeps((info as { dependencies: unknown }).dependencies);
+            }
+          }
+        }
+      };
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        'dependencies' in parsed &&
+        typeof parsed.dependencies === 'object' &&
+        parsed.dependencies !== null
+      ) {
+        extractDeps(parsed.dependencies);
+      }
+      return deps;
+    }
+
+    return this._extractDependencies(parsed);
+  }
+
+  public _getDependenciesFromFile(
+    file: Express.Multer.File,
+  ): Record<string, string> {
+    const deps: Record<string, string> = {};
+
+    const isZip =
+      file.mimetype === 'application/zip' || file.originalname.endsWith('.zip');
+
+    if (isZip) {
+      try {
+        const zip = new AdmZip(file.buffer);
+        const entries = zip.getEntries();
+
+        entries.forEach((entry) => {
+          if (!entry.isDirectory) {
+            const baseName = path.basename(entry.entryName).toLowerCase();
+            if (
+              baseName === 'package.json' ||
+              baseName === 'package-lock.json'
+            ) {
+              const buffer = entry.getData();
+              if (!Buffer.isBuffer(buffer)) return;
+
+              const content = buffer.toString('utf-8');
+              const isLock = baseName === 'package-lock.json';
+              const fileDeps = this._getDependenciesFromJson(content, isLock);
+              Object.assign(deps, fileDeps);
+            }
+          }
+        });
+
+        if (Object.keys(deps).length === 0) {
+          throw new HttpException(
+            'No package.json or package-lock.json found in the uploaded zip folder.',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+
+        return deps;
+      } catch {
+        throw new HttpException(
+          'Failed to read or parse the uploaded zip folder.',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+    }
+
+    if (
+      file.originalname.endsWith('package.json') ||
+      file.originalname.endsWith('package-lock.json')
+    ) {
+      const content = file.buffer.toString('utf-8');
+      const isLock = file.originalname.endsWith('package-lock.json');
+      return this._getDependenciesFromJson(content, isLock);
+    }
+
+    throw new HttpException(
+      'Unsupported file type. Please upload a zip folder or package.json/package-lock.json file.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+
   private _calculateHealthScore(
     repo: GitHubRepoResponse,
     commitActivity: { week: number; total: number }[],
@@ -434,6 +556,7 @@ export class RepoHealthService {
       0,
     );
     const commitScore = Math.min(totalRecentCommits / 100, 1);
+
     const dependencyScore = Math.min(Math.max(dependencyHealth / 100, 0), 1);
 
     const issuePenalty = Math.max(
@@ -442,10 +565,11 @@ export class RepoHealthService {
         ((repo.open_issues_count ?? 0) / ((repo.stargazers_count ?? 0) + 1)) *
           0.5,
     );
+
     const securityPenalty =
       securityAlerts && securityAlerts.length > 0 ? 0.5 : 1;
 
-    const score =
+    const weighted =
       (starsScore * WEIGHTS.STARS +
         forksScore * WEIGHTS.FORKS +
         recencyScore * WEIGHTS.RECENCY +
@@ -455,6 +579,17 @@ export class RepoHealthService {
         securityPenalty * WEIGHTS.SECURITY) *
       100;
 
-    return Math.round(Math.max(0, Math.min(score, 100)));
+    const score = Math.round(Math.max(0, Math.min(weighted, 100)));
+
+    const label =
+      score >= 80
+        ? 'Excellent'
+        : score >= 60
+          ? 'Good'
+          : score >= 40
+            ? 'Moderate'
+            : 'Poor';
+
+    return { score, label };
   }
 }
