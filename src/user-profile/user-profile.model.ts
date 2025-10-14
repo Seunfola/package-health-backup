@@ -1,24 +1,27 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 
-@Schema()
+@Schema({ timestamps: true })
 export class UserProfile extends Document {
   @Prop({ required: false })
   name?: string;
 
-  @Prop({ required: false, unique: true })
+  @Prop({ required: false, unique: true, lowercase: true, trim: true })
   email?: string;
 
-  @Prop({ required: false })
+  @Prop()
   profile_picture_url?: string;
 
-  @Prop({ required: false })
+  @Prop()
+  bio?: string;
+
+  @Prop()
   linkedin_url?: string;
 
-  @Prop({ required: false })
+  @Prop()
   github_url?: string;
 
-  @Prop({ required: false })
+  @Prop()
   twitter_url?: string;
 }
 
