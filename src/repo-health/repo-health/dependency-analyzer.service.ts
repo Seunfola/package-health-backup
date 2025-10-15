@@ -3,7 +3,7 @@ import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
-
+import * as os from 'os';
 const execAsync = promisify(exec);
 
 interface DependencyAnalysisResult {
@@ -38,7 +38,9 @@ export class DependencyAnalyzerService {
       }
     }
 
-    const tempDir = path.join(process.cwd(), 'tmp', `audit-${Date.now()}`);
+    const auditId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tempDir = path.join(os.tmpdir(), `audit-${auditId}`);
+
     fs.mkdirSync(tempDir, { recursive: true });
 
     const pkgJson = {
@@ -54,7 +56,6 @@ export class DependencyAnalyzerService {
     );
 
     try {
-      // 1️⃣ Install dependencies (timeout + optional Docker)
       await this.safeExec(
         'npm install --ignore-scripts --silent',
         tempDir,
@@ -62,23 +63,10 @@ export class DependencyAnalyzerService {
         useDocker,
       );
 
-      // 2️⃣ Run npm outdated
-      const outdated = await this.safeJsonExec(
-        'npm outdated --json',
-        tempDir,
-        60_000,
-        useDocker,
-      );
-
-      // 3️⃣ Run npm audit
-      const auditResult = await this.safeJsonExec(
-        'npm audit --json',
-        tempDir,
-        60_000,
-        useDocker,
-      );
-
-      // 4️⃣ Analyze results
+      const [outdated, auditResult] = await Promise.all([
+        this.safeJsonExec('npm outdated --json', tempDir, 60000, useDocker),
+        this.safeJsonExec('npm audit --json', tempDir, 60000, useDocker),
+      ]);
       const vulnerabilities = this.extractVulnerabilities(auditResult);
       const risky = Object.keys(vulnerabilities);
       const outdatedList = this.extractOutdated(outdated);
@@ -112,25 +100,69 @@ export class DependencyAnalyzerService {
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      try {
+        await new Promise((r) => setTimeout(r, 300));
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            await fs.promises.rm(tempDir, { recursive: true, force: true });
+            break;
+          } catch (err) {
+            if (
+              err &&
+              typeof err === 'object' &&
+              'code' in err &&
+              (err as { code?: unknown }).code === 'EBUSY' &&
+              attempt < 2
+            ) {
+              console.warn(
+                `Cleanup attempt ${attempt + 1} failed: resource busy, retrying...`,
+              );
+              await new Promise((resolve) => setTimeout(resolve, 400));
+            } else if (
+              err &&
+              typeof err === 'object' &&
+              'code' in err &&
+              (err as { code?: unknown }).code === 'ENOENT'
+            ) {
+              // already deleted, no issue
+              break;
+            } else {
+              const msg =
+                err && typeof err === 'object' && 'message' in err
+                  ? String((err as { message?: unknown }).message)
+                  : String(err);
+              console.warn(`Cleanup failed permanently: ${msg}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`Cleanup skipped: ${(err as Error).message}`);
+      }
     }
   }
 
-  // 🧩 Safe exec with timeout and optional Docker
   private async safeExec(
     command: string,
     cwd: string,
     timeout = 60_000,
     useDocker = false,
-  ) {
-    const wrapped = useDocker
-      ? `docker run --rm -v ${cwd}:/app -w /app node:20-alpine sh -c "${command}"`
-      : command;
-
-    return execAsync(wrapped, { cwd, timeout });
+  ): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      const { exec } = require('child_process');
+      const child = exec(command, { cwd, timeout }, (error, stdout, stderr) => {
+        if (error) {
+          return reject(
+            new Error(
+              `Command failed: ${command}\nExit code: ${error.code}\n${stderr || stdout}`,
+            ),
+          );
+        }
+        resolve({ stdout, stderr });
+      });
+    });
   }
 
-  // 🧩 Safe JSON exec wrapper
   private async safeJsonExec(
     command: string,
     cwd: string,
@@ -153,7 +185,6 @@ export class DependencyAnalyzerService {
     }
   }
 
-  /** 🔍 Extract vulnerabilities from audit results */
   private extractVulnerabilities(auditJson: Record<string, unknown>) {
     const result: Record<string, { severity: string; via: string[] }> = {};
     let vulns: Record<string, unknown> = {};
@@ -203,7 +234,6 @@ export class DependencyAnalyzerService {
     return result;
   }
 
-  /** 🧮 Extract outdated dependencies */
   private extractOutdated(outdatedJson: Record<string, any>) {
     const list: { name: string; current: string; latest: string }[] = [];
 
@@ -225,7 +255,6 @@ export class DependencyAnalyzerService {
     return list;
   }
 
-  /** ⚖️ Compute dependency health score */
   private calculateHealthScore(
     vulnerabilities: Record<string, any>,
     outdated: any[],
@@ -243,7 +272,6 @@ export class DependencyAnalyzerService {
     return { score, health, totalVulns, totalOutdated };
   }
 
-  /** 🔎 Detect unstable (alpha/beta/rc) versions */
   private detectUnstableDeps(deps: Record<string, string>) {
     return Object.entries(deps)
       .filter(([, version]) => /alpha|beta|rc|snapshot|next/i.test(version))
