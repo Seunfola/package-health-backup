@@ -6,15 +6,17 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Enable CORS
+  const corsOrigin = process.env.CORS_ORIGIN;
+  if (!corsOrigin) {
+    throw new Error('CORS_ORIGIN env variable is not set!');
+  }
+
   app.enableCors({
-    origin: 'https://package-health-rho.vercel.app',
+    origin: corsOrigin,
   });
 
-  // Global validation
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
-  // Swagger setup
   const config = new DocumentBuilder()
     .setTitle('Package Health API')
     .setDescription(
@@ -24,7 +26,7 @@ async function bootstrap() {
     .addBearerAuth(
       { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
       'JWT',
-    ) // optional if you plan to use JWT auth
+    )
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
