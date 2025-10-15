@@ -3,7 +3,7 @@ import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
-
+import * as os from 'os';
 const execAsync = promisify(exec);
 
 interface DependencyAnalysisResult {
@@ -38,7 +38,9 @@ export class DependencyAnalyzerService {
       }
     }
 
-    const tempDir = path.join(process.cwd(), 'tmp', `audit-${Date.now()}`);
+    const auditId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tempDir = path.join(os.tmpdir(), `audit-${auditId}`);
+
     fs.mkdirSync(tempDir, { recursive: true });
 
     const pkgJson = {
@@ -62,9 +64,9 @@ export class DependencyAnalyzerService {
       );
 
       const [outdated, auditResult] = await Promise.all([
-  this.safeJsonExec('npm outdated --json', tempDir, 60000, useDocker),
-  this.safeJsonExec('npm audit --json', tempDir, 60000, useDocker),
-]);
+        this.safeJsonExec('npm outdated --json', tempDir, 60000, useDocker),
+        this.safeJsonExec('npm audit --json', tempDir, 60000, useDocker),
+      ]);
       const vulnerabilities = this.extractVulnerabilities(auditResult);
       const risky = Object.keys(vulnerabilities);
       const outdatedList = this.extractOutdated(outdated);
@@ -98,27 +100,67 @@ export class DependencyAnalyzerService {
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     } finally {
-  try {
-    await fs.remove(tempDir);
-  } catch (err: any) {
-    if (err.code === 'EBUSY') {
-      await new Promise((r) => setTimeout(r, 200));
-      await fs.remove(tempDir);
+      try {
+        await new Promise((r) => setTimeout(r, 300));
+
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            await fs.promises.rm(tempDir, { recursive: true, force: true });
+            break;
+          } catch (err) {
+            if (
+              err &&
+              typeof err === 'object' &&
+              'code' in err &&
+              (err as { code?: unknown }).code === 'EBUSY' &&
+              attempt < 2
+            ) {
+              console.warn(
+                `Cleanup attempt ${attempt + 1} failed: resource busy, retrying...`,
+              );
+              await new Promise((resolve) => setTimeout(resolve, 400));
+            } else if (
+              err &&
+              typeof err === 'object' &&
+              'code' in err &&
+              (err as { code?: unknown }).code === 'ENOENT'
+            ) {
+              // already deleted, no issue
+              break;
+            } else {
+              const msg =
+                err && typeof err === 'object' && 'message' in err
+                  ? String((err as { message?: unknown }).message)
+                  : String(err);
+              console.warn(`Cleanup failed permanently: ${msg}`);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`Cleanup skipped: ${(err as Error).message}`);
+      }
     }
   }
-}
 
   private async safeExec(
     command: string,
     cwd: string,
     timeout = 60_000,
     useDocker = false,
-  ) {
-    const wrapped = useDocker
-      ? `docker run --rm -v ${cwd}:/app -w /app node:20-alpine sh -c "${command}"`
-      : command;
-
-    return execAsync(wrapped, { cwd, timeout });
+  ): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+      const { exec } = require('child_process');
+      const child = exec(command, { cwd, timeout }, (error, stdout, stderr) => {
+        if (error) {
+          return reject(
+            new Error(
+              `Command failed: ${command}\nExit code: ${error.code}\n${stderr || stdout}`,
+            ),
+          );
+        }
+        resolve({ stdout, stderr });
+      });
+    });
   }
 
   private async safeJsonExec(

@@ -80,7 +80,6 @@ export class RepoHealthController {
       // Extract dependencies from uploaded file (supports zip + single file)
       const deps = this.repoHealthService['_getDependenciesFromFile'](file);
 
-      // Analyze dependencies locally (no GitHub API)
       const analysis = await this.repoHealthService.analyzeJson(
         JSON.stringify({ dependencies: deps }),
       );
@@ -91,7 +90,6 @@ export class RepoHealthController {
         dependency_health: analysis.dependency_health,
         risky_dependencies: analysis.risky_dependencies,
         outdated_dependencies: analysis.outdated_dependencies,
-        // unstable_dependencies is not available on the analysis result type
       };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
