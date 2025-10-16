@@ -76,6 +76,100 @@ export class RepoHealthService {
     }
   }
 
+  // Add these methods to RepoHealthService class
+
+  async findOne(
+    owner: string,
+    repo: string,
+  ): Promise<RepoHealthDocument | null> {
+    try {
+      const record = await this.repoHealthModel.findOne({ owner, repo }).exec();
+      return record;
+    } catch {
+      throw new HttpException(
+        'Failed to find repository',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  async findMany(query: {
+    owner?: string;
+    repo?: string;
+    minHealthScore?: number;
+    limit?: number;
+    offset?: number;
+  }): Promise<RepoHealthDocument[]> {
+    try {
+      const { owner, repo, minHealthScore, limit = 50, offset = 0 } = query;
+
+      // Give mongoQuery a clear type
+      const mongoQuery: Record<string, unknown> = {};
+
+      if (owner) {
+        mongoQuery['owner'] = owner;
+      }
+
+      if (repo) {
+        mongoQuery['repo'] = repo;
+      }
+
+      if (minHealthScore !== undefined) {
+        mongoQuery['overall_health.score'] = { $gte: minHealthScore };
+      }
+
+      const records = await this.repoHealthModel
+        .find(mongoQuery)
+        .skip(offset)
+        .limit(limit)
+        .exec();
+
+      return records;
+    } catch {
+      throw new HttpException(
+        'Failed to find repositories',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  async findAll(): Promise<RepoHealthDocument[]> {
+    try {
+      return await this.repoHealthModel.find().exec();
+    } catch {
+      throw new HttpException(
+        'Failed to retrieve all repositories',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  // For notification service integration
+  async getAllRepoStatuses(): Promise<any[]> {
+    try {
+      const repos = await this.repoHealthModel.find().lean().exec();
+      return repos.map((repo) => ({
+        ...repo,
+        // Ensure compatibility with notification service expected structure
+        vulnerabilities: Array.from(
+          { length: repo.security_alerts || 0 },
+          (_, i) => ({
+            packageName: `vulnerability-${i}`,
+            severity: 'high',
+            detectedAt: new Date(),
+          }),
+        ),
+        outdatedDependencies: (repo.risky_dependencies || []).map((name) => ({
+          name,
+          latest: 'unknown',
+          updatedAt: new Date(),
+        })),
+      }));
+    } catch {
+      return [];
+    }
+  }
+
   async findRepoHealth(owner: string, repo: string) {
     const record = await this.repoHealthModel.findOne({ owner, repo }).exec();
     if (!record) {

@@ -1,9 +1,7 @@
-// notification.controller.ts
 import {
   Controller,
   Get,
   Post,
-  Delete,
   Param,
   Query,
   Body,
@@ -26,20 +24,25 @@ export class NotificationController {
   async getNotifications(
     @Query('limit') limit?: number,
     @Query('offset') offset?: number,
-    @Query('unreadOnly') unreadOnly?: boolean,
-    @Query('type') type?: NotificationType,
-    @Query('priority') priority?: NotificationPriority,
+    @Query('unreadOnly') unreadOnly?: string,
+    @Query('type') type?: string,
+    @Query('priority') priority?: string,
   ): Promise<Notification[]> {
     try {
-      return await this.notificationService.getUserNotifications('user', {
+      return await this.notificationService.getUserNotifications({
         limit: limit ? Number(limit) : undefined,
         offset: offset ? Number(offset) : undefined,
         unreadOnly: unreadOnly === 'true',
-        type,
-        priority,
+        type: type as NotificationType | undefined,
+        priority: priority as NotificationPriority | undefined,
       });
-    } catch (error) {
-      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+    } catch (error: any) {
+      throw new HttpException(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Internal Server Error',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -48,7 +51,12 @@ export class NotificationController {
     try {
       return await this.notificationService.getNotificationSummary();
     } catch (error) {
-      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Internal Server Error',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -67,8 +75,13 @@ export class NotificationController {
         generated: notifications.length,
         notifications,
       };
-    } catch (error) {
-      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+    } catch (error: any) {
+      throw new HttpException(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Internal Server Error',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -76,8 +89,13 @@ export class NotificationController {
   async markAsRead(@Param('id') id: string): Promise<Notification> {
     try {
       return await this.notificationService.markAsRead(id);
-    } catch (error) {
-      throw new HttpException(error.message, HttpStatus.NOT_FOUND);
+    } catch (error: any) {
+      throw new HttpException(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Notification not found',
+        HttpStatus.NOT_FOUND,
+      );
     }
   }
 
@@ -92,26 +110,28 @@ export class NotificationController {
           : 'Internal Server Error',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
-  }
-
-  @Delete(':id')
-  async deleteNotification(
-    @Param('id') id: string,
-  ): Promise<{ message: string }> {
-    try {
-      await this.notificationService.deleteNotification(id);
-      return { message: 'Notification deleted successfully' };
-    } catch (error) {
-      throw new HttpException(error.message, HttpStatus.NOT_FOUND);
     }
-  }
 
-  @Delete()
-  async clearAllNotifications(): Promise<{ deletedCount: number }> {
-    try {
-      return await this.notificationService.clearAllNotifications();
-    } catch (error) {
-      throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
+    //   @Delete(':id')
+    //   async deleteNotification(
+    //     @Param('id') id: string,
+    //   ): Promise<{ message: string }> {
+    //     try {
+    //       await this.notificationService.deleteNotification(id);
+    //       return { message: 'Notification deleted successfully' };
+    //     } catch (error) {
+    //       throw new HttpException(error.message, HttpStatus.NOT_FOUND);
+    //     }
+    //   }
+
+    //   @Delete()
+    //   async clearAllNotifications(): Promise<{ deletedCount: number }> {
+    //     try {
+    //       return await this.notificationService.clearAllNotifications();
+    //     } catch (error) {
+    //       throw new HttpException(error.message, HttpStatus.INTERNAL_SERVER_ERROR);
+    //     }
+    //   }
+    // }
   }
 }
