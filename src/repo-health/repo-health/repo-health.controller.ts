@@ -26,7 +26,7 @@ interface OwnerRepoBody {
 export class RepoHealthController {
   constructor(private readonly repoHealthService: RepoHealthService) {}
 
-  /** 🔍 Analyze GitHub repo by URL */
+  /** Analyze GitHub repo by URL */
   @Post('analyze-url')
   @ApiOperation({ summary: 'Analyze a repository by GitHub URL' })
   @ApiBody({
@@ -97,7 +97,7 @@ export class RepoHealthController {
     }
   }
 
-  /** 🧾 Analyze pasted package.json content only */
+  /** Analyze pasted package.json content only */
   @Post('analyze-package/paste')
   @ApiOperation({ summary: 'Analyze pasted package.json content' })
   @ApiBody({
@@ -122,7 +122,7 @@ export class RepoHealthController {
     }
   }
 
-  /** 🔎 Fetch stored repo health from DB */
+  /** Fetch stored repo health from DB */
   @Post('fetch')
   @ApiOperation({ summary: 'Fetch stored repository health info' })
   @ApiBody({

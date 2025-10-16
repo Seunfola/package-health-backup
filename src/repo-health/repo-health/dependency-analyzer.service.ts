@@ -1,7 +1,7 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
-import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { exec, ExecException } from 'child_process';
 import { promisify } from 'util';
 import * as os from 'os';
 const execAsync = promisify(exec);
@@ -148,19 +148,28 @@ export class DependencyAnalyzerService {
     timeout = 60_000,
     useDocker = false,
   ): Promise<{ stdout: string; stderr: string }> {
-    return new Promise((resolve, reject) => {
-      const { exec } = require('child_process');
-      const child = exec(command, { cwd, timeout }, (error, stdout, stderr) => {
-        if (error) {
-          return reject(
-            new Error(
-              `Command failed: ${command}\nExit code: ${error.code}\n${stderr || stdout}`,
-            ),
-          );
-        }
-        resolve({ stdout, stderr });
+    try {
+      // Wrap the command if Docker mode is enabled
+      const finalCommand = useDocker
+        ? `docker run --rm -v "${cwd}:/app" -w /app node:18 bash -c "${command}"`
+        : command;
+
+      const { stdout, stderr } = await execAsync(finalCommand, {
+        cwd,
+        timeout,
       });
-    });
+      return { stdout, stderr };
+    } catch (error: any) {
+      const execError = error as ExecException & {
+        stdout?: string;
+        stderr?: string;
+      };
+      throw new Error(
+        `Command failed: ${command}\n` +
+          `Exit code: ${execError.code ?? 'unknown'}\n` +
+          `${execError.stderr || execError.stdout || execError.message}`,
+      );
+    }
   }
 
   private async safeJsonExec(
