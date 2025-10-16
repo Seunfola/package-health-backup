@@ -11,14 +11,12 @@ import { lastValueFrom } from 'rxjs';
 import axios from 'axios';
 import { DependencyAnalyzerService } from './repo-health/repo-health/dependency-analyzer.service';
 
-// --- CLI Args Interface ---
 interface CLIArgs {
   url: string;
   token?: string;
 }
 
 export const createMockModel = (): Model<RepoHealthDocument> => {
-  // Explicitly define the structure of a mock RepoHealthDocument
   const mockDoc: RepoHealthDocument = {
     _id: 'mock-id' as unknown,
     repo_id: 'mock/repo',
@@ -36,7 +34,7 @@ export const createMockModel = (): Model<RepoHealthDocument> => {
     overall_health: { score: 100, label: 'Excellent' },
     toObject(this: RepoHealthDocument) {
       const { toObject, ...rest } = this as unknown as Record<string, unknown>;
-      return { ...rest } as RepoHealthDocument;
+      return { ...rest } as unknown as RepoHealthDocument;
     },
   } as unknown as RepoHealthDocument;
 
@@ -45,35 +43,34 @@ export const createMockModel = (): Model<RepoHealthDocument> => {
       exec(): Promise<RepoHealthDocument | null> {
         return Promise.resolve(null);
       },
-      lean() {
+      lean(this: { exec: () => Promise<any> }) {
         return this;
       },
     }),
 
     findOneAndUpdate: () => ({
       exec(): Promise<RepoHealthDocument> {
-        return Promise.resolve({ ...mockDoc });
+        return Promise.resolve({ ...mockDoc } as unknown as RepoHealthDocument);
       },
-      lean() {
+      lean(this: { exec: () => Promise<any> }) {
         return this;
       },
     }),
 
     find: () => ({
-      async exec(): Promise<RepoHealthDocument[]> {
-        return [];
+      exec(): Promise<RepoHealthDocument[]> {
+        return Promise.resolve([]);
       },
-      lean() {
+      lean(this: { exec: () => Promise<any> }) {
         return this;
       },
     }),
 
-    async create(): Promise<RepoHealthDocument> {
-      // No await needed; returns a resolved promise with proper type
-      return { ...mockDoc };
+    create(): Promise<RepoHealthDocument> {
+      return Promise.resolve({ ...mockDoc } as unknown as RepoHealthDocument);
     },
 
-    async updateOne() {
+    updateOne() {
       return Promise.resolve({
         acknowledged: true,
         matchedCount: 0,
@@ -81,19 +78,18 @@ export const createMockModel = (): Model<RepoHealthDocument> => {
       });
     },
 
-    async deleteOne() {
+    deleteOne() {
       return Promise.resolve({
         acknowledged: true,
         deletedCount: 0,
       });
     },
 
-    async countDocuments(): Promise<number> {
+    countDocuments(): Promise<number> {
       return Promise.resolve(0);
     },
   };
 
-  // Return safely typed mock
   return baseMock as unknown as Model<RepoHealthDocument>;
 };
 
@@ -156,17 +152,17 @@ async function main() {
     const result = await repoHealthService.analyzeRepo(
       owner,
       repo,
-      undefined, // no file upload
-      undefined, // no rawJson
-      token, // optional GitHub token
+      undefined,
+      undefined,
+      token,
     );
 
-    console.log('\n✅ Analysis Result:\n');
+    console.log('\n Analysis Result:\n');
     console.log(JSON.stringify(result, null, 2));
     process.exit(0);
   } catch (error) {
     console.error(
-      '\n❌ Error:',
+      '\n Error:',
       error instanceof Error ? error.message : 'Unknown error occurred.',
     );
     process.exit(1);

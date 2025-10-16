@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { RepositoryDetailsService } from './repository-details.service.js';
+import { RepositoryDetailsService } from './repository-details.service';
 
 describe('RepositoryDetailsService', () => {
   let service: RepositoryDetailsService;

@@ -198,34 +198,42 @@ export class NotificationService {
       limit = 20,
     } = options ?? {};
 
-    const query: Record<string, unknown> = {};
+    // Define query with precise shape
+    const query: Partial<
+      Record<keyof NotificationQueryParams | 'read', unknown>
+    > = {};
 
-    if (unreadOnly) {
-      query.read = false;
-    }
+    if (unreadOnly) query.read = false;
+    if (type) query.type = type;
+    if (priority) query.priority = priority;
 
-    if (type) {
-      query.type = type;
-    }
-
-    if (priority) {
-      query.priority = priority;
-    }
+    // Enforce safe bounds
+    const safeLimit = Math.min(Math.max(limit, 1), 100);
+    const safeOffset = Math.max(offset, 0);
 
     try {
       const notifications = await this.notificationModel
         .find(query)
         .sort({ createdAt: -1 })
-        .skip(offset)
-        .limit(limit)
+        .skip(safeOffset)
+        .limit(safeLimit)
         .lean()
         .exec();
 
       return notifications.map(
         (notification) => new NotificationResponseDto(notification),
       );
-    } catch (error: unknown) {
-      this.logger.error('Failed to fetch notifications:', error);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown error occurred';
+
+      this.logger.error('Failed to fetch notifications', {
+        query,
+        offset: safeOffset,
+        limit: safeLimit,
+        error: message,
+      });
+
       throw new BadRequestException('Failed to fetch notifications');
     }
   }

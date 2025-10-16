@@ -5,7 +5,10 @@ import {
   IsUrl,
   IsBoolean,
   IsObject,
+  IsNumber,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+// import { NotificationType, NotificationPriority } from './notification.dto';
 
 export type NotificationType =
   | 'SECURITY_VULNERABILITY'
@@ -53,6 +56,37 @@ export class CreateNotificationDto {
   @IsObject()
   @IsOptional()
   metadata?: Record<string, any>;
+}
+
+export class NotificationQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  limit?: number = 10;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  offset?: number = 0;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  unreadOnly?: boolean = false;
+
+  @IsOptional()
+  @IsEnum([
+    'SECURITY_VULNERABILITY',
+    'DEPENDENCY_UPDATE',
+    'NEW_ISSUE',
+    'PULL_REQUEST',
+    'SYSTEM_ALERT',
+  ])
+  type?: NotificationType;
+
+  @IsOptional()
+  @IsEnum(['low', 'medium', 'high', 'critical'])
+  priority?: NotificationPriority;
 }
 
 export class UpdateNotificationDto {
