@@ -173,7 +173,7 @@ export class NotificationService {
     return [];
   }
 
-  // --- GET USER NOTIFICATIONS ---
+  // GET USER NOTIFICATIONS
   async getUserNotifications(
     options?: NotificationQueryParams | NotificationQueryDto,
   ): Promise<NotificationResponseDto[]> {
@@ -210,7 +210,7 @@ export class NotificationService {
     }
   }
 
-  // --- GET SUMMARY ---
+  // GET SUMMARY
   async getNotificationSummary(): Promise<INotificationSummary> {
     try {
       const [total, unread, byTypeRaw, byPriorityRaw] = await Promise.all([
@@ -261,7 +261,7 @@ export class NotificationService {
     }
   }
 
-  // --- TYPE GUARDS ---
+  // TYPE GUARDS
   private isValidNotificationType(type: string): type is NotificationType {
     return NOTIFICATION_TYPES.includes(type as NotificationType);
   }
@@ -272,7 +272,7 @@ export class NotificationService {
     return NOTIFICATION_PRIORITIES.includes(priority as NotificationPriority);
   }
 
-  // --- MARK AS READ ---
+  // MARK AS READ
   async markAsRead(notificationId: string): Promise<NotificationResponseDto> {
     if (!Types.ObjectId.isValid(notificationId)) {
       throw new BadRequestException('Invalid notification ID');
@@ -291,7 +291,7 @@ export class NotificationService {
     return new NotificationResponseDto(notification);
   }
 
-  // --- MARK ALL AS READ ---
+  // MARK ALL AS READ
   async markAllAsRead(): Promise<{ modifiedCount: number }> {
     const result = await this.notificationModel
       .updateMany({ read: false }, { read: true })
@@ -299,7 +299,7 @@ export class NotificationService {
     return { modifiedCount: result.modifiedCount };
   }
 
-  // --- DELETE ---
+  // DELETE
   async deleteNotification(notificationId: string): Promise<void> {
     if (!Types.ObjectId.isValid(notificationId)) {
       throw new BadRequestException('Invalid notification ID');
@@ -478,7 +478,7 @@ export class NotificationService {
     const result = await this.notificationModel
       .deleteMany({
         createdAt: { $lt: cutoffDate },
-        read: true, // Only delete read notifications
+        read: true,
       })
       .exec();
 

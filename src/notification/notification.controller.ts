@@ -29,7 +29,7 @@ import type { NotificationSummary } from './notification.interface';
 export class NotificationController {
   constructor(private readonly notificationService: NotificationService) {}
 
-  // --- GET ALL NOTIFICATIONS ---
+  // GET ALL NOTIFICATIONS
   @Get()
   async getNotifications(
     @Query() query: NotificationQueryDto,
@@ -45,7 +45,7 @@ export class NotificationController {
     }
   }
 
-  // --- GET NOTIFICATION BY ID ---
+  // GET NOTIFICATION BY ID
   @Get(':id')
   async getNotificationById(
     @Param('id') id: string,
@@ -62,7 +62,7 @@ export class NotificationController {
     }
   }
 
-  // --- GET SUMMARY ---
+  // GET SUMMARY
   @Get('summary')
   async getSummary(): Promise<NotificationSummary> {
     try {
@@ -74,7 +74,7 @@ export class NotificationController {
     }
   }
 
-  // --- GET UNREAD COUNT ---
+  // GET UNREAD COUNT
   @Get('stats/unread')
   async getUnreadCount(): Promise<{ count: number }> {
     try {
@@ -86,7 +86,7 @@ export class NotificationController {
     }
   }
 
-  // --- GET NOTIFICATIONS BY REPOSITORY ---
+  // GET NOTIFICATIONS BY REPOSITORY
   @Get('repository/:repository')
   async getNotificationsByRepository(
     @Param('repository') repository: string,
@@ -104,7 +104,7 @@ export class NotificationController {
     }
   }
 
-  // --- SEARCH NOTIFICATIONS ---
+  // SEARCH NOTIFICATIONS
   @Get('search/:term')
   async searchNotifications(
     @Param('term') searchTerm: string,
@@ -124,7 +124,7 @@ export class NotificationController {
     }
   }
 
-  // --- CREATE NOTIFICATION ---
+  // CREATE NOTIFICATION
   @Post()
   async createNotification(
     @Body() createNotificationDto: CreateNotificationDto,
@@ -142,7 +142,7 @@ export class NotificationController {
     }
   }
 
-  // --- GENERATE NOTIFICATIONS ---
+  // GENERATE NOTIFICATIONS
   @Post('generate/:owner/:repo')
   async generateNotifications(
     @Param('owner') owner: string,
@@ -167,7 +167,7 @@ export class NotificationController {
     }
   }
 
-  // --- MARK SINGLE AS READ ---
+  // MARK SINGLE AS READ
   @Post(':id/read')
   async markAsRead(@Param('id') id: string): Promise<NotificationResponseDto> {
     try {
@@ -186,7 +186,7 @@ export class NotificationController {
     }
   }
 
-  // --- MARK MULTIPLE AS READ ---
+  // MARK MULTIPLE AS READ
   @Post('mark-read')
   async markMultipleAsRead(
     @Body() body: { notificationIds: string[] },
@@ -204,7 +204,7 @@ export class NotificationController {
     }
   }
 
-  // --- MARK ALL AS READ ---
+  // MARK ALL AS READ
   @Post('read-all')
   async markAllAsRead(): Promise<MarkAllReadResponseDto> {
     try {
@@ -216,7 +216,7 @@ export class NotificationController {
     }
   }
 
-  // --- UPDATE NOTIFICATION ---
+  // UPDATE NOTIFICATION
   @Put(':id')
   async updateNotification(
     @Param('id') id: string,
@@ -239,7 +239,7 @@ export class NotificationController {
     }
   }
 
-  // --- DELETE SINGLE ---
+  // DELETE SINGLE
   @Delete(':id')
   async deleteNotification(
     @Param('id') id: string,
@@ -257,7 +257,7 @@ export class NotificationController {
     }
   }
 
-  // --- DELETE MULTIPLE ---
+  // DELETE MULTIPLE
   @Delete('bulk/delete')
   async deleteMultipleNotifications(
     @Body() body: { notificationIds: string[] },
@@ -275,7 +275,7 @@ export class NotificationController {
     }
   }
 
-  // --- DELETE ALL ---
+  // DELETE ALL
   @Delete()
   async clearAllNotifications(): Promise<ClearAllResponseDto> {
     try {
@@ -289,7 +289,7 @@ export class NotificationController {
     }
   }
 
-  // --- CLEANUP OLD NOTIFICATIONS ---
+  // CLEANUP OLD NOTIFICATIONS
   @Post('cleanup')
   async cleanupOldNotifications(
     @Query('days') days?: string,

@@ -1,5 +1,3 @@
-// notification.constants.ts
-
 export const NOTIFICATION_TYPES = [
   'SECURITY_VULNERABILITY',
   'DEPENDENCY_UPDATE',

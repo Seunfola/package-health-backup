@@ -9,7 +9,7 @@ import {
   IsIn,
   Min,
   Max,
-  Matches, // add IsIn
+  Matches,
 } from 'class-validator';
 import {
   NOTIFICATION_TYPES,
