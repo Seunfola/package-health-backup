@@ -8,6 +8,7 @@ import { RepositoryDetailsModule } from './repository-details/repository-details
 import { AuthModule } from './auth/auth.module';
 import { DatabaseModule } from './config/database.module';
 import { NotificationModule } from './notification/notification.module';
+import { UserPreferencesModule } from './preference/preferences.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { NotificationModule } from './notification/notification.module';
     UserProfileModule,
     RepositoryDetailsModule,
     NotificationModule,
+    UserPreferencesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

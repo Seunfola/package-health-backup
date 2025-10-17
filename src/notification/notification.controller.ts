@@ -11,6 +11,8 @@ import {
   HttpStatus,
   UsePipes,
   ValidationPipe,
+  UseGuards,
+  Request,
 } from '@nestjs/common';
 import { NotificationService } from './notification.service';
 import {
@@ -23,6 +25,7 @@ import {
   NotificationQueryDto,
 } from './notification.dto';
 import type { NotificationSummary } from './notification.interface';
+import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 
 @Controller('notifications')
 @UsePipes(new ValidationPipe({ transform: true }))
@@ -144,19 +147,22 @@ export class NotificationController {
 
   // GENERATE NOTIFICATIONS
   @Post('generate/:owner/:repo')
+  @UseGuards(JwtAuthGuard)
   async generateNotifications(
     @Param('owner') owner: string,
     @Param('repo') repo: string,
+    @Request() req,
   ): Promise<{ generated: number; notifications: NotificationResponseDto[] }> {
     try {
       const notifications =
         await this.notificationService.generateNotificationsForRepo(
           owner,
           repo,
+          (req as { user?: { id?: string } }).user?.id,
         );
       return {
         generated: notifications.length,
-        notifications: notifications,
+        notifications,
       };
     } catch (error: unknown) {
       const message =
