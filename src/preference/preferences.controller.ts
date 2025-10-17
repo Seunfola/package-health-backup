@@ -1,4 +1,3 @@
-// preferences.controller.ts
 import {
   Controller,
   Get,
@@ -17,7 +16,6 @@ import {
   PreferencesResponseDto,
 } from './preferences.dto';
 
-// Define proper types
 interface AuthenticatedRequest {
   user: {
     id: string;
