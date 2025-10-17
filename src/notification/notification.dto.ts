@@ -27,11 +27,10 @@ export class CreateNotificationDto {
   repository!: string;
 
   @IsUrl()
-  repositoryUrl: string;
+  repositoryUrl!: string;
 
   @IsString()
-  title: string;
-
+  title!: string;
   @IsString()
   @IsOptional()
   description?: string;
@@ -91,7 +90,7 @@ export class NotificationQueryDto {
 }
 
 export class NotificationResponseDto {
-  _id: string;
+  _id?: string;
   type: (typeof NOTIFICATION_TYPES)[number];
   repository: string;
   repositoryUrl: string;
