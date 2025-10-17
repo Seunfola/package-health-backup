@@ -1,10 +1,19 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+@Schema({ _id: false })
+export class OverallHealth {
+  @Prop({ type: Number, required: true })
+  score: number;
+
+  @Prop({ type: String, required: true })
+  label: string;
+}
+export const OverallHealthSchema = SchemaFactory.createForClass(OverallHealth);
 
 @Schema({ timestamps: true })
 export class RepoHealth extends Document {
   @Prop({ required: true, unique: true })
-  repo_id: string; // Composite key for owner/repo
+  repo_id: string;
 
   @Prop({ required: true })
   owner: string;
@@ -27,10 +36,9 @@ export class RepoHealth extends Document {
   @Prop()
   last_pushed: Date;
 
-  @Prop()
-  overall_health: number;
+  @Prop({ type: OverallHealthSchema })
+  overall_health: OverallHealth;
 
-  // Additional fields for more detailed analysis
   @Prop()
   commit_activity: number[];
 

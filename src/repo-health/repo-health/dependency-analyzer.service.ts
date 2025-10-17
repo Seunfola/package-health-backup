@@ -1,9 +1,10 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
+import { exec } from 'child_process';
 import * as fs from 'fs';
-import * as path from 'path';
-import { exec, ExecException } from 'child_process';
-import { promisify } from 'util';
 import * as os from 'os';
+import * as path from 'path';
+import { promisify } from 'util';
+
 const execAsync = promisify(exec);
 
 interface DependencyAnalysisResult {
@@ -19,16 +20,12 @@ interface DependencyAnalysisResult {
 
 @Injectable()
 export class DependencyAnalyzerService {
-  /**
-   * Analyzes a dependency set safely — optionally using Docker isolation.
-   */
   async analyzeDependencies(
     deps: Record<string, string>,
     options?: { useDocker?: boolean },
   ): Promise<DependencyAnalysisResult> {
     const { useDocker = false } = options ?? {};
 
-    // 🧩 Validate dependency names (prevent path traversal or injection)
     for (const name of Object.keys(deps)) {
       if (!/^[a-zA-Z0-9._@/-]+$/.test(name)) {
         throw new HttpException(
@@ -38,35 +35,46 @@ export class DependencyAnalyzerService {
       }
     }
 
-    const auditId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const tempDir = path.join(os.tmpdir(), `audit-${auditId}`);
+    const tempDir = path.join(os.tmpdir(), `audit-${Date.now()}`);
 
-    fs.mkdirSync(tempDir, { recursive: true });
-
-    const pkgJson = {
-      name: 'audit-temp',
-      version: '1.0.0',
-      private: true,
-      dependencies: deps,
-    };
-
-    fs.writeFileSync(
-      path.join(tempDir, 'package.json'),
-      JSON.stringify(pkgJson, null, 2),
-    );
+    let cleanupSuccessful = false;
 
     try {
+      await fs.promises.mkdir(tempDir, { recursive: true });
+
+      const pkgJson = {
+        name: 'audit-temp',
+        version: '1.0.0',
+        private: true,
+        dependencies: deps,
+      };
+
+      await fs.promises.writeFile(
+        path.join(tempDir, 'package.json'),
+        JSON.stringify(pkgJson, null, 2),
+      );
+
       await this.safeExec(
-        'npm install --ignore-scripts --silent',
+        'npm install --ignore-scripts --silent --no-audit --no-fund',
+        tempDir,
+        120_000,
+        useDocker,
+      );
+
+      const outdated = await this.safeJsonExec(
+        'npm outdated --json',
         tempDir,
         60_000,
         useDocker,
       );
 
-      const [outdated, auditResult] = await Promise.all([
-        this.safeJsonExec('npm outdated --json', tempDir, 60000, useDocker),
-        this.safeJsonExec('npm audit --json', tempDir, 60000, useDocker),
-      ]);
+      const auditResult = await this.safeJsonExec(
+        'npm audit --json',
+        tempDir,
+        60_000,
+        useDocker,
+      );
+
       const vulnerabilities = this.extractVulnerabilities(auditResult);
       const risky = Object.keys(vulnerabilities);
       const outdatedList = this.extractOutdated(outdated);
@@ -76,6 +84,8 @@ export class DependencyAnalyzerService {
         outdatedList,
       );
       const unstable = this.detectUnstableDeps(deps);
+
+      cleanupSuccessful = true;
 
       return {
         score,
@@ -100,44 +110,14 @@ export class DependencyAnalyzerService {
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     } finally {
-      try {
-        await new Promise((r) => setTimeout(r, 300));
-
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            await fs.promises.rm(tempDir, { recursive: true, force: true });
-            break;
-          } catch (err) {
-            if (
-              err &&
-              typeof err === 'object' &&
-              'code' in err &&
-              (err as { code?: unknown }).code === 'EBUSY' &&
-              attempt < 2
-            ) {
-              console.warn(
-                `Cleanup attempt ${attempt + 1} failed: resource busy, retrying...`,
-              );
-              await new Promise((resolve) => setTimeout(resolve, 400));
-            } else if (
-              err &&
-              typeof err === 'object' &&
-              'code' in err &&
-              (err as { code?: unknown }).code === 'ENOENT'
-            ) {
-              // already deleted, no issue
-              break;
-            } else {
-              const msg =
-                err && typeof err === 'object' && 'message' in err
-                  ? String((err as { message?: unknown }).message)
-                  : String(err);
-              console.warn(`Cleanup failed permanently: ${msg}`);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn(`Cleanup skipped: ${(err as Error).message}`);
+      if (!cleanupSuccessful) {
+        await this.cleanupDirectory(tempDir);
+      } else {
+        setTimeout(() => {
+          this.cleanupDirectory(tempDir).catch(() => {
+            console.warn(`Failed to cleanup directory: ${tempDir}`);
+          });
+        }, 5000);
       }
     }
   }
@@ -145,31 +125,18 @@ export class DependencyAnalyzerService {
   private async safeExec(
     command: string,
     cwd: string,
-    timeout = 60_000,
+    timeout = 120_000,
     useDocker = false,
-  ): Promise<{ stdout: string; stderr: string }> {
-    try {
-      // Wrap the command if Docker mode is enabled
-      const finalCommand = useDocker
-        ? `docker run --rm -v "${cwd}:/app" -w /app node:18 bash -c "${command}"`
-        : command;
+  ) {
+    const wrapped = useDocker
+      ? `docker run --rm -v ${cwd}:/app -w /app node:20-alpine sh -c "${command}"`
+      : command;
 
-      const { stdout, stderr } = await execAsync(finalCommand, {
-        cwd,
-        timeout,
-      });
-      return { stdout, stderr };
-    } catch (error: any) {
-      const execError = error as ExecException & {
-        stdout?: string;
-        stderr?: string;
-      };
-      throw new Error(
-        `Command failed: ${command}\n` +
-          `Exit code: ${execError.code ?? 'unknown'}\n` +
-          `${execError.stderr || execError.stdout || execError.message}`,
-      );
-    }
+    return execAsync(wrapped, {
+      cwd,
+      timeout,
+      killSignal: 'SIGKILL',
+    });
   }
 
   private async safeJsonExec(
@@ -285,5 +252,53 @@ export class DependencyAnalyzerService {
     return Object.entries(deps)
       .filter(([, version]) => /alpha|beta|rc|snapshot|next/i.test(version))
       .map(([pkg]) => pkg);
+  }
+
+  private async cleanupDirectory(dir: string): Promise<void> {
+    if (!fs.existsSync(dir)) return;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+        console.log(`✅ Successfully cleaned up directory: ${dir}`);
+        return;
+      } catch (err) {
+        const code =
+          typeof err === 'object' && err !== null && 'code' in err
+            ? (err as { code?: string }).code
+            : undefined;
+        const message =
+          typeof err === 'object' && err !== null && 'message' in err
+            ? (err as { message?: string }).message
+            : String(err);
+
+        if (code === 'EBUSY' || code === 'ENOTEMPTY') {
+          console.warn(
+            `⚠️ Cleanup attempt ${attempt + 1} failed for ${dir}: ${message}`,
+          );
+          if (attempt < 2)
+            await new Promise((resolve) =>
+              setTimeout(resolve, 2000 * (attempt + 1)),
+            );
+        } else if (
+          typeof err === 'object' &&
+          err !== null &&
+          'code' in err &&
+          (err as { code?: string }).code === 'ENOENT'
+        ) {
+          console.log(`Directory already deleted: ${dir}`);
+          return;
+        } else {
+          const message =
+            typeof err === 'object' && err !== null && 'message' in err
+              ? (err as { message?: string }).message
+              : String(err);
+          console.error(`Unexpected cleanup error for ${dir}:`, message);
+          break;
+        }
+      }
+    }
+
+    console.error(`Failed to cleanup directory after 3 attempts: ${dir}`);
   }
 }

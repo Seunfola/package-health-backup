@@ -8,7 +8,6 @@ import {
   IsNumber,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-// import { NotificationType, NotificationPriority } from './notification.dto';
 
 export type NotificationType =
   | 'SECURITY_VULNERABILITY'
