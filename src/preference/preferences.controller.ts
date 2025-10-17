@@ -51,7 +51,7 @@ export class UserPreferencesController {
     @Request() req: AuthenticatedRequest,
   ): Promise<PreferencesResponseDto> {
     try {
-      const userId = req.user.id; // Type-safe access
+      const userId = req.user.id;
       const preferences = await this.preferencesService.resetToDefaults(userId);
       return new PreferencesResponseDto(preferences);
     } catch (error: unknown) {
@@ -66,7 +66,7 @@ export class UserPreferencesController {
     @Request() req: AuthenticatedRequest,
   ): Promise<PreferencesResponseDto> {
     try {
-      const userId = req.user.id; // Type-safe access
+      const userId = req.user.id;
       const preferences =
         await this.preferencesService.getUserPreferences(userId);
       return new PreferencesResponseDto(preferences);
@@ -83,7 +83,7 @@ export class UserPreferencesController {
     @Body() updatePreferencesDto: UpdatePreferencesDto,
   ): Promise<PreferencesResponseDto> {
     try {
-      const userId = req.user.id; // Type-safe access
+      const userId = req.user.id;
 
       const preferences = await this.preferencesService.updateUserPreferences(
         userId,
