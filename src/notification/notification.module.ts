@@ -1,17 +1,20 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { NotificationService } from './notification.service';
-import { RepoHealthService } from 'src/repo-health/repo-health/repo-health.service';
 import { NotificationController } from './notification.controller';
-
+import { NotificationSchema } from './notification.model';
+import { RepoHealthModule } from '../repo-health/repo-health.module';
 @Module({
   imports: [
     MongooseModule.forFeature([
-      { name: Notification.name, schema: NotificationService },
+      {
+        name: 'Notification',
+        schema: NotificationSchema,
+      },
     ]),
+    RepoHealthModule,
   ],
-  providers: [NotificationService, RepoHealthService],
+  providers: [NotificationService],
   controllers: [NotificationController],
-  exports: [NotificationService],
 })
 export class NotificationModule {}

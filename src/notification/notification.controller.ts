@@ -2,41 +2,40 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Param,
   Query,
   Delete,
+  Body,
   HttpException,
   HttpStatus,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
 import { NotificationService } from './notification.service';
-import { NotificationSummary } from './notification.interface';
-import { NotificationResponseDto } from './notification.model';
+import {
+  NotificationResponseDto,
+  MarkAllReadResponseDto,
+  ClearAllResponseDto,
+  BulkOperationResponseDto,
+  CreateNotificationDto,
+  UpdateNotificationDto,
+  NotificationQueryDto,
+} from './notification.dto';
+import type { NotificationSummary } from './notification.interface';
 
 @Controller('notifications')
+@UsePipes(new ValidationPipe({ transform: true }))
 export class NotificationController {
   constructor(private readonly notificationService: NotificationService) {}
 
-  // --- GET ALL ---
+  // GET ALL NOTIFICATIONS
   @Get()
   async getNotifications(
-    @Query('limit') limit?: string,
-    @Query('offset') offset?: string,
-    @Query('unreadOnly') unreadOnly?: string,
-    @Query('type') type?: import('./notification.interface').NotificationType,
-    @Query('priority')
-    priority?: import('./notification.interface').NotificationPriority,
+    @Query() query: NotificationQueryDto,
   ): Promise<NotificationResponseDto[]> {
     try {
-      const parsedLimit = limit ? Number(limit) : undefined;
-      const parsedOffset = offset ? Number(offset) : undefined;
-
-      return await this.notificationService.getUserNotifications({
-        limit: parsedLimit,
-        offset: parsedOffset,
-        unreadOnly: unreadOnly === 'true',
-        type,
-        priority,
-      });
+      return await this.notificationService.getUserNotifications(query);
     } catch (error: unknown) {
       const message =
         error instanceof Error
@@ -46,7 +45,24 @@ export class NotificationController {
     }
   }
 
-  // --- SUMMARY ---
+  // GET NOTIFICATION BY ID
+  @Get(':id')
+  async getNotificationById(
+    @Param('id') id: string,
+  ): Promise<NotificationResponseDto> {
+    try {
+      return await this.notificationService.getNotificationById(id);
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to fetch notification';
+      const status = message.toLowerCase().includes('not found')
+        ? HttpStatus.NOT_FOUND
+        : HttpStatus.BAD_REQUEST;
+      throw new HttpException(message, status);
+    }
+  }
+
+  // GET SUMMARY
   @Get('summary')
   async getSummary(): Promise<NotificationSummary> {
     try {
@@ -58,7 +74,75 @@ export class NotificationController {
     }
   }
 
-  // --- GENERATE NOTIFICATIONS ---
+  // GET UNREAD COUNT
+  @Get('stats/unread')
+  async getUnreadCount(): Promise<{ count: number }> {
+    try {
+      return await this.notificationService.getUnreadCount();
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to get unread count';
+      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  // GET NOTIFICATIONS BY REPOSITORY
+  @Get('repository/:repository')
+  async getNotificationsByRepository(
+    @Param('repository') repository: string,
+  ): Promise<NotificationResponseDto[]> {
+    try {
+      return await this.notificationService.getNotificationsByRepository(
+        repository,
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to fetch repository notifications';
+      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  // SEARCH NOTIFICATIONS
+  @Get('search/:term')
+  async searchNotifications(
+    @Param('term') searchTerm: string,
+    @Query() query: NotificationQueryDto,
+  ): Promise<NotificationResponseDto[]> {
+    try {
+      return await this.notificationService.searchNotifications(
+        searchTerm,
+        query,
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to search notifications';
+      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  // CREATE NOTIFICATION
+  @Post()
+  async createNotification(
+    @Body() createNotificationDto: CreateNotificationDto,
+  ): Promise<NotificationResponseDto> {
+    try {
+      return await this.notificationService.createNotification(
+        createNotificationDto,
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to create notification';
+      throw new HttpException(message, HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  // GENERATE NOTIFICATIONS
   @Post('generate/:owner/:repo')
   async generateNotifications(
     @Param('owner') owner: string,
@@ -72,7 +156,7 @@ export class NotificationController {
         );
       return {
         generated: notifications.length,
-        notifications,
+        notifications: notifications,
       };
     } catch (error: unknown) {
       const message =
@@ -83,25 +167,46 @@ export class NotificationController {
     }
   }
 
-  // --- MARK SINGLE AS READ ---
+  // MARK SINGLE AS READ
   @Post(':id/read')
   async markAsRead(@Param('id') id: string): Promise<NotificationResponseDto> {
     try {
-      return await this.notificationService.markAsRead(id);
+      const notification = await this.notificationService.markAsRead(id);
+      if (!notification) {
+        throw new HttpException('Notification not found', HttpStatus.NOT_FOUND);
+      }
+      return notification;
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : 'Notification not found';
-      const status =
-        error instanceof Error && message.includes('not found')
-          ? HttpStatus.NOT_FOUND
-          : HttpStatus.BAD_REQUEST;
+      const status = message.toLowerCase().includes('not found')
+        ? HttpStatus.NOT_FOUND
+        : HttpStatus.BAD_REQUEST;
       throw new HttpException(message, status);
     }
   }
 
-  // --- MARK ALL AS READ ---
+  // MARK MULTIPLE AS READ
+  @Post('mark-read')
+  async markMultipleAsRead(
+    @Body() body: { notificationIds: string[] },
+  ): Promise<BulkOperationResponseDto> {
+    try {
+      return await this.notificationService.markMultipleAsRead(
+        body.notificationIds,
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to mark notifications as read';
+      throw new HttpException(message, HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  // MARK ALL AS READ
   @Post('read-all')
-  async markAllAsRead(): Promise<{ modifiedCount: number }> {
+  async markAllAsRead(): Promise<MarkAllReadResponseDto> {
     try {
       return await this.notificationService.markAllAsRead();
     } catch (error: unknown) {
@@ -111,7 +216,30 @@ export class NotificationController {
     }
   }
 
-  // --- DELETE SINGLE ---
+  // UPDATE NOTIFICATION
+  @Put(':id')
+  async updateNotification(
+    @Param('id') id: string,
+    @Body() updateNotificationDto: UpdateNotificationDto,
+  ): Promise<NotificationResponseDto> {
+    try {
+      return await this.notificationService.updateNotification(
+        id,
+        updateNotificationDto,
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to update notification';
+      const status = message.toLowerCase().includes('not found')
+        ? HttpStatus.NOT_FOUND
+        : HttpStatus.BAD_REQUEST;
+      throw new HttpException(message, status);
+    }
+  }
+
+  // DELETE SINGLE
   @Delete(':id')
   async deleteNotification(
     @Param('id') id: string,
@@ -122,17 +250,34 @@ export class NotificationController {
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : 'Notification not found';
-      const status =
-        error instanceof Error && message.includes('not found')
-          ? HttpStatus.NOT_FOUND
-          : HttpStatus.BAD_REQUEST;
+      const status = message.includes('not found')
+        ? HttpStatus.NOT_FOUND
+        : HttpStatus.BAD_REQUEST;
       throw new HttpException(message, status);
     }
   }
 
-  // --- DELETE ALL ---
+  // DELETE MULTIPLE
+  @Delete('bulk/delete')
+  async deleteMultipleNotifications(
+    @Body() body: { notificationIds: string[] },
+  ): Promise<BulkOperationResponseDto> {
+    try {
+      return await this.notificationService.deleteMultipleNotifications(
+        body.notificationIds,
+      );
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to delete notifications';
+      throw new HttpException(message, HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  // DELETE ALL
   @Delete()
-  async clearAllNotifications(): Promise<{ deletedCount: number }> {
+  async clearAllNotifications(): Promise<ClearAllResponseDto> {
     try {
       return await this.notificationService.clearAllNotifications();
     } catch (error: unknown) {
@@ -140,6 +285,23 @@ export class NotificationController {
         error instanceof Error
           ? error.message
           : 'Failed to clear notifications';
+      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  // CLEANUP OLD NOTIFICATIONS
+  @Post('cleanup')
+  async cleanupOldNotifications(
+    @Query('days') days?: string,
+  ): Promise<{ deletedCount: number }> {
+    try {
+      const daysOld = days ? parseInt(days, 10) : 30;
+      return await this.notificationService.cleanupOldNotifications(daysOld);
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to cleanup notifications';
       throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }

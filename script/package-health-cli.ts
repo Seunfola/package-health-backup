@@ -5,11 +5,11 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { HttpService } from '@nestjs/axios';
 import { Model } from 'mongoose';
-import { RepoHealthService } from './repo-health/repo-health/repo-health.service';
-import { RepoHealthDocument } from './repo-health/repo-health/repo-health.model';
+import { RepoHealthService } from '../src/repo-health/repo-health/repo-health.service';
+import { RepoHealthDocument } from '../src/repo-health/repo-health/repo-health.model';
 import { lastValueFrom } from 'rxjs';
 import axios from 'axios';
-import { DependencyAnalyzerService } from './repo-health/repo-health/dependency-analyzer.service';
+import { DependencyAnalyzerService } from '../src/repo-health/repo-health/dependency-analyzer.service';
 
 interface CLIArgs {
   url: string;
