@@ -15,5 +15,6 @@ import { DependencyAnalyzerService } from './repo-health/dependency-analyzer.ser
   ],
   controllers: [RepoHealthController],
   providers: [RepoHealthService, DependencyAnalyzerService],
+  exports: [RepoHealthService],
 })
 export class RepoHealthModule {}
