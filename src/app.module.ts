@@ -7,6 +7,7 @@ import { UserProfileModule } from './user-profile/user-profile.module';
 import { RepositoryDetailsModule } from './repository-details/repository-details.module';
 import { AuthModule } from './auth/auth.module';
 import { DatabaseModule } from './config/database.module';
+import { NotificationModule } from './notification/notification.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { DatabaseModule } from './config/database.module';
     AuthModule,
     UserProfileModule,
     RepositoryDetailsModule,
+    NotificationModule,
   ],
   controllers: [AppController],
   providers: [AppService],

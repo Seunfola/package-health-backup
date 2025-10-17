@@ -9,8 +9,13 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { NotificationService } from './notification.service';
-import { NotificationSummary } from './notification.interface';
-import { NotificationResponseDto } from './notification.model';
+import type {
+  NotificationType,
+  NotificationPriority,
+} from './notification.constants';
+import { NotificationResponseDto } from './notification.dto';
+import type { NotificationSummary } from './notification.interface';
+import type { NotificationQueryParams } from './notification.interface';
 
 @Controller('notifications')
 export class NotificationController {
@@ -22,21 +27,22 @@ export class NotificationController {
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
     @Query('unreadOnly') unreadOnly?: string,
-    @Query('type') type?: import('./notification.interface').NotificationType,
-    @Query('priority')
-    priority?: import('./notification.interface').NotificationPriority,
+    @Query('type') type?: NotificationType,
+    @Query('priority') priority?: NotificationPriority,
   ): Promise<NotificationResponseDto[]> {
     try {
-      const parsedLimit = limit ? Number(limit) : undefined;
-      const parsedOffset = offset ? Number(offset) : undefined;
-
-      return await this.notificationService.getUserNotifications({
-        limit: parsedLimit,
-        offset: parsedOffset,
+      const query: NotificationQueryParams = {
+        limit: limit ? Number(limit) : undefined,
+        offset: offset ? Number(offset) : undefined,
         unreadOnly: unreadOnly === 'true',
         type,
         priority,
-      });
+      };
+
+      const notifications =
+        await this.notificationService.getUserNotifications(query);
+      // Ensure strict typing for returned notifications
+      return notifications as NotificationResponseDto[];
     } catch (error: unknown) {
       const message =
         error instanceof Error
@@ -72,7 +78,7 @@ export class NotificationController {
         );
       return {
         generated: notifications.length,
-        notifications,
+        notifications: notifications as NotificationResponseDto[],
       };
     } catch (error: unknown) {
       const message =
@@ -86,17 +92,20 @@ export class NotificationController {
   // --- MARK SINGLE AS READ ---
   @Post(':id/read')
   async markAsRead(@Param('id') id: string): Promise<NotificationResponseDto> {
-    try {
-      return await this.notificationService.markAsRead(id);
-    } catch (error: unknown) {
-      const message =
-        error instanceof Error ? error.message : 'Notification not found';
-      const status =
-        error instanceof Error && message.includes('not found')
-          ? HttpStatus.NOT_FOUND
-          : HttpStatus.BAD_REQUEST;
-      throw new HttpException(message, status);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const notification = await this.notificationService.markAsRead(id);
+    if (!notification) {
+      throw new HttpException('Notification not found', HttpStatus.NOT_FOUND);
     }
+    return notification as NotificationResponseDto;
+  }
+  catch(error: unknown) {
+    const message =
+      error instanceof Error ? error.message : 'Notification not found';
+    const status = message.toLowerCase().includes('not found')
+      ? HttpStatus.NOT_FOUND
+      : HttpStatus.BAD_REQUEST;
+    throw new HttpException(message, status);
   }
 
   // --- MARK ALL AS READ ---
@@ -122,10 +131,9 @@ export class NotificationController {
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : 'Notification not found';
-      const status =
-        error instanceof Error && message.includes('not found')
-          ? HttpStatus.NOT_FOUND
-          : HttpStatus.BAD_REQUEST;
+      const status = message.includes('not found')
+        ? HttpStatus.NOT_FOUND
+        : HttpStatus.BAD_REQUEST;
       throw new HttpException(message, status);
     }
   }

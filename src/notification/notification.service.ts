@@ -1,4 +1,3 @@
-// notification.service.ts
 import {
   Injectable,
   Logger,
@@ -6,33 +5,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model, Types, FilterQuery } from 'mongoose';
+import { RepoHealthService } from 'src/repo-health/repo-health/repo-health.service';
 import {
-  NotificationType,
-  NotificationPriority,
-  NotificationSummary,
+  NotificationSummary as INotificationSummary,
   NotificationQueryParams,
+  Notification as INotification,
 } from './notification.interface';
+
+import {
+  NOTIFICATION_TYPES,
+  NOTIFICATION_PRIORITIES,
+  NotificationPriority,
+  NotificationType,
+} from './notification.constants';
 import {
   CreateNotificationDto,
-  UpdateNotificationDto,
+  NotificationQueryDto,
   NotificationResponseDto,
-} from './notification.model';
-import { RepoHealthService } from 'src/repo-health/repo-health/repo-health.service';
-
-interface NotificationDocument {
-  _id: Types.ObjectId;
-  type: NotificationType;
-  repository: string;
-  repositoryUrl: string;
-  title: string;
-  description?: string;
-  priority: NotificationPriority;
-  detailsUrl?: string;
-  read: boolean;
-  createdAt: Date;
-  metadata?: Record<string, any>;
-}
+  UpdateNotificationDto,
+} from './notification.dto';
 
 @Injectable()
 export class NotificationService {
@@ -40,10 +32,11 @@ export class NotificationService {
 
   constructor(
     @InjectModel('Notification')
-    private readonly notificationModel: Model<NotificationDocument>,
+    private readonly notificationModel: Model<INotification>,
     private readonly repoHealthService: RepoHealthService,
   ) {}
 
+  // GENERATE NOTIFICATIONS FOR A REPO
   async generateNotificationsForRepo(
     owner: string,
     repo: string,
@@ -53,23 +46,20 @@ export class NotificationService {
     const repoId = `${owner}/${repo}`;
 
     try {
-      // Get repo health data
       const healthData = await this.repoHealthService.findRepoHealth(
         owner,
         repo,
       );
 
-      // Generate security vulnerability notifications
+      // Security alerts
       if (healthData.security_alerts > 0) {
         notifications.push({
-          type: 'SECURITY_VULNERABILITY' as NotificationType,
+          type: 'SECURITY_VULNERABILITY',
           repository: repoId,
           repositoryUrl: repoUrl,
           title: `Security Alert: ${healthData.security_alerts} vulnerability(s) detected`,
           description: `Your repository has ${healthData.security_alerts} security vulnerability(s) that need attention.`,
-          priority: (healthData.security_alerts > 5
-            ? 'critical'
-            : 'high') as NotificationPriority,
+          priority: healthData.security_alerts > 5 ? 'critical' : 'high',
           detailsUrl: `${repoUrl}/security/advisories`,
           read: false,
           metadata: {
@@ -79,16 +69,18 @@ export class NotificationService {
         });
       }
 
-      // Generate dependency health notifications
+      // Dependency health
       if (healthData.dependency_health < 70) {
         const priority: NotificationPriority =
           healthData.dependency_health < 40 ? 'high' : 'medium';
         notifications.push({
-          type: 'DEPENDENCY_UPDATE' as NotificationType,
+          type: 'DEPENDENCY_UPDATE',
           repository: repoId,
           repositoryUrl: repoUrl,
           title: `Dependency Health: ${healthData.dependency_health}% - Needs Improvement`,
-          description: `Your dependencies are ${100 - healthData.dependency_health}% below optimal health. Consider updating outdated packages.`,
+          description: `Your dependencies are ${
+            100 - healthData.dependency_health
+          }% below optimal health. Consider updating outdated packages.`,
           priority,
           detailsUrl: `${repoUrl}/network/dependencies`,
           read: false,
@@ -99,61 +91,62 @@ export class NotificationService {
         });
       }
 
-      // Generate overall health notifications - handle both object and number formats
-      let overallHealthScore: number | null = null;
-      let overallHealthLabel: string | undefined = undefined;
+      // Overall health
+      let overallScore: number | null = null;
+      let overallLabel: string | undefined;
 
       if (typeof healthData.overall_health === 'number') {
-        overallHealthScore = healthData.overall_health;
-        overallHealthLabel =
-          overallHealthScore >= 80
+        overallScore = healthData.overall_health;
+        overallLabel =
+          overallScore >= 80
             ? 'Excellent'
-            : overallHealthScore >= 60
+            : overallScore >= 60
               ? 'Good'
-              : overallHealthScore >= 40
+              : overallScore >= 40
                 ? 'Moderate'
                 : 'Poor';
       } else if (
         healthData.overall_health &&
-        typeof healthData.overall_health === 'object'
+        typeof healthData.overall_health === 'object' &&
+        healthData.overall_health !== null
       ) {
-        const { score, label } = healthData.overall_health as {
+        const healthObj = healthData.overall_health as {
           score?: unknown;
           label?: unknown;
         };
-        overallHealthScore = typeof score === 'number' ? score : null;
-        overallHealthLabel = typeof label === 'string' ? label : undefined;
+        overallScore =
+          typeof healthObj.score === 'number' ? healthObj.score : null;
+        overallLabel =
+          typeof healthObj.label === 'string' ? healthObj.label : undefined;
       }
 
-      if (overallHealthScore !== null && overallHealthScore < 60) {
+      if (overallScore !== null && overallScore < 60) {
         notifications.push({
-          type: 'SYSTEM_ALERT' as NotificationType,
+          type: 'SYSTEM_ALERT',
           repository: repoId,
           repositoryUrl: repoUrl,
-          title: `Repository Health: ${overallHealthScore}% - ${overallHealthLabel || 'Needs Improvement'}`,
+          title: `Repository Health: ${overallScore}% - ${overallLabel ?? 'Needs Improvement'}`,
           description: `Your repository health score indicates areas that need improvement for better maintainability and security.`,
-          priority: overallHealthScore < 40 ? 'high' : 'medium',
+          priority: overallScore < 40 ? 'high' : 'medium',
           detailsUrl: repoUrl,
           read: false,
-          metadata: {
-            healthScore: overallHealthScore,
-            healthLabel: overallHealthLabel,
-          },
+          metadata: { healthScore: overallScore, healthLabel: overallLabel },
         });
       }
 
-      // Generate activity notifications for stale repos
+      // Inactivity alert
       const lastPushed = new Date(healthData.last_pushed);
       const daysSinceLastPush =
         (Date.now() - lastPushed.getTime()) / (1000 * 60 * 60 * 24);
-
       if (daysSinceLastPush > 90) {
         notifications.push({
-          type: 'SYSTEM_ALERT' as NotificationType,
+          type: 'SYSTEM_ALERT',
           repository: repoId,
           repositoryUrl: repoUrl,
           title: 'Repository Inactivity Alert',
-          description: `This repository hasn't been updated in ${Math.floor(daysSinceLastPush)} days. Consider archiving if no longer maintained.`,
+          description: `This repository hasn't been updated in ${Math.floor(
+            daysSinceLastPush,
+          )} days. Consider archiving if no longer maintained.`,
           priority: 'low',
           detailsUrl: repoUrl,
           read: false,
@@ -164,31 +157,26 @@ export class NotificationService {
         });
       }
 
-      // Save notifications to database and return with DTO
       if (notifications.length > 0) {
-        const savedNotifications =
-          await this.notificationModel.insertMany(notifications);
-        return savedNotifications.map(
-          (notification) =>
-            new NotificationResponseDto(notification.toObject()),
-        );
+        const saved = await this.notificationModel.insertMany(notifications);
+        return saved.map((n) => new NotificationResponseDto(n.toObject()));
       }
-    } catch (error: unknown) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error occurred';
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
       this.logger.error(
-        `Failed to generate notifications for ${repoId}: ${errorMessage}`,
+        `Failed to generate notifications for ${repoId}: ${message}`,
       );
       throw new BadRequestException(
-        `Failed to generate notifications: ${errorMessage}`,
+        `Failed to generate notifications: ${message}`,
       );
     }
 
     return [];
   }
 
+  // --- GET USER NOTIFICATIONS ---
   async getUserNotifications(
-    options?: NotificationQueryParams,
+    options?: NotificationQueryParams | NotificationQueryDto,
   ): Promise<NotificationResponseDto[]> {
     const {
       type,
@@ -198,49 +186,35 @@ export class NotificationService {
       limit = 20,
     } = options ?? {};
 
-    // Define query with precise shape
-    const query: Partial<
-      Record<keyof NotificationQueryParams | 'read', unknown>
-    > = {};
+    const query: FilterQuery<INotification> = {};
 
     if (unreadOnly) query.read = false;
     if (type) query.type = type;
     if (priority) query.priority = priority;
 
-    // Enforce safe bounds
-    const safeLimit = Math.min(Math.max(limit, 1), 100);
-    const safeOffset = Math.max(offset, 0);
-
     try {
       const notifications = await this.notificationModel
         .find(query)
         .sort({ createdAt: -1 })
-        .skip(safeOffset)
-        .limit(safeLimit)
+        .skip(Math.max(offset, 0))
+        .limit(Math.min(Math.max(limit, 1), 100))
         .lean()
         .exec();
 
-      return notifications.map(
-        (notification) => new NotificationResponseDto(notification),
+      return notifications.map((n) => new NotificationResponseDto(n));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      this.logger.error(`Failed to fetch notifications: ${message}`, { query });
+      throw new BadRequestException(
+        `Failed to fetch notifications: ${message}`,
       );
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Unknown error occurred';
-
-      this.logger.error('Failed to fetch notifications', {
-        query,
-        offset: safeOffset,
-        limit: safeLimit,
-        error: message,
-      });
-
-      throw new BadRequestException('Failed to fetch notifications');
     }
   }
 
-  async getNotificationSummary(): Promise<NotificationSummary> {
+  // --- GET SUMMARY ---
+  async getNotificationSummary(): Promise<INotificationSummary> {
     try {
-      const [total, unread, byType, byPriority] = await Promise.all([
+      const [total, unread, byTypeRaw, byPriorityRaw] = await Promise.all([
         this.notificationModel.countDocuments(),
         this.notificationModel.countDocuments({ read: false }),
         this.notificationModel.aggregate<{ _id: string; count: number }>([
@@ -251,8 +225,8 @@ export class NotificationService {
         ]),
       ]);
 
-      // Type-safe type mapping
-      const byTypeMap: Record<NotificationType, number> = {
+      // Initialize with all types set to 0
+      const byType: Record<NotificationType, number> = {
         SECURITY_VULNERABILITY: 0,
         DEPENDENCY_UPDATE: 0,
         NEW_ISSUE: 0,
@@ -260,183 +234,143 @@ export class NotificationService {
         SYSTEM_ALERT: 0,
       };
 
-      byType.forEach((item) => {
+      byTypeRaw.forEach((item) => {
         if (this.isValidNotificationType(item._id)) {
-          byTypeMap[item._id] = item.count;
+          byType[item._id] = item.count;
         }
       });
 
-      // Type-safe priority mapping
-      const byPriorityMap: Record<NotificationPriority, number> = {
+      // Initialize with all priorities set to 0
+      const byPriority: Record<NotificationPriority, number> = {
         low: 0,
         medium: 0,
         high: 0,
         critical: 0,
       };
 
-      byPriority.forEach((item) => {
+      byPriorityRaw.forEach((item) => {
         if (this.isValidNotificationPriority(item._id)) {
-          byPriorityMap[item._id] = item.count;
+          byPriority[item._id] = item.count;
         }
       });
 
-      return {
-        total,
-        unread,
-        byType: byTypeMap,
-        byPriority: byPriorityMap,
-      };
-    } catch (error: unknown) {
-      this.logger.error('Failed to get notification summary:', error);
+      return { total, unread, byType, byPriority };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      this.logger.error('Failed to get notification summary', { message });
       throw new BadRequestException('Failed to get notification summary');
     }
   }
 
-  // Type guard for NotificationType
+  // --- TYPE GUARDS ---
   private isValidNotificationType(type: string): type is NotificationType {
-    return [
-      'SECURITY_VULNERABILITY',
-      'DEPENDENCY_UPDATE',
-      'NEW_ISSUE',
-      'PULL_REQUEST',
-      'SYSTEM_ALERT',
-    ].includes(type);
+    return NOTIFICATION_TYPES.includes(type as NotificationType);
   }
 
-  // Type guard for NotificationPriority
   private isValidNotificationPriority(
     priority: string,
   ): priority is NotificationPriority {
-    return ['low', 'medium', 'high', 'critical'].includes(priority);
+    return NOTIFICATION_PRIORITIES.includes(priority as NotificationPriority);
   }
 
+  // --- MARK AS READ ---
   async markAsRead(notificationId: string): Promise<NotificationResponseDto> {
     if (!Types.ObjectId.isValid(notificationId)) {
       throw new BadRequestException('Invalid notification ID');
     }
 
-    try {
-      const notification = await this.notificationModel
-        .findByIdAndUpdate(notificationId, { read: true }, { new: true })
-        .lean()
-        .exec();
+    const notification = await this.notificationModel
+      .findByIdAndUpdate(notificationId, { read: true }, { new: true })
+      .lean()
+      .exec();
 
-      if (!notification) {
-        throw new NotFoundException(
-          `Notification with ID ${notificationId} not found`,
-        );
-      }
-
-      return new NotificationResponseDto(notification);
-    } catch (error: unknown) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      this.logger.error(
-        `Failed to mark notification as read: ${notificationId}`,
-        error,
+    if (!notification) {
+      throw new NotFoundException(
+        `Notification with ID ${notificationId} not found`,
       );
-      throw new BadRequestException('Failed to mark notification as read');
     }
+    return new NotificationResponseDto(notification);
   }
 
+  // --- MARK ALL AS READ ---
   async markAllAsRead(): Promise<{ modifiedCount: number }> {
-    try {
-      const result = await this.notificationModel
-        .updateMany({ read: false }, { read: true })
-        .exec();
-
-      return { modifiedCount: result.modifiedCount };
-    } catch (error: unknown) {
-      this.logger.error('Failed to mark all notifications as read:', error);
-      throw new BadRequestException('Failed to mark all notifications as read');
-    }
+    const result = await this.notificationModel
+      .updateMany({ read: false }, { read: true })
+      .exec();
+    return { modifiedCount: result.modifiedCount };
   }
 
+  // --- DELETE ---
   async deleteNotification(notificationId: string): Promise<void> {
     if (!Types.ObjectId.isValid(notificationId)) {
       throw new BadRequestException('Invalid notification ID');
     }
 
-    try {
-      const result = await this.notificationModel
-        .findByIdAndDelete(notificationId)
-        .exec();
-
-      if (!result) {
-        throw new NotFoundException(
-          `Notification with ID ${notificationId} not found`,
-        );
-      }
-    } catch (error: unknown) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      this.logger.error(
-        `Failed to delete notification: ${notificationId}`,
-        error,
+    const result = await this.notificationModel
+      .findByIdAndDelete(notificationId)
+      .exec();
+    if (!result) {
+      throw new NotFoundException(
+        `Notification with ID ${notificationId} not found`,
       );
-      throw new BadRequestException('Failed to delete notification');
     }
   }
 
   async clearAllNotifications(): Promise<{ deletedCount: number }> {
-    try {
-      const result = await this.notificationModel.deleteMany({}).exec();
-      return { deletedCount: result.deletedCount };
-    } catch (error: unknown) {
-      this.logger.error('Failed to clear all notifications:', error);
-      throw new BadRequestException('Failed to clear all notifications');
-    }
+    const result = await this.notificationModel.deleteMany({}).exec();
+    return { deletedCount: result.deletedCount };
   }
 
   async createNotification(
-    createNotificationDto: CreateNotificationDto,
+    dto: CreateNotificationDto,
   ): Promise<NotificationResponseDto> {
-    try {
-      const notification = new this.notificationModel({
-        ...createNotificationDto,
-        createdAt: new Date(),
-      });
-
-      const saved = await notification.save();
-      return new NotificationResponseDto(saved.toObject());
-    } catch (error: unknown) {
-      this.logger.error('Failed to create notification:', error);
-      throw new BadRequestException('Failed to create notification');
-    }
+    const notification = new this.notificationModel({
+      ...dto,
+      createdAt: new Date(),
+    });
+    const saved = await notification.save();
+    return new NotificationResponseDto(saved.toObject());
   }
 
   async updateNotification(
     notificationId: string,
-    updateNotificationDto: UpdateNotificationDto,
+    dto: UpdateNotificationDto,
   ): Promise<NotificationResponseDto> {
     if (!Types.ObjectId.isValid(notificationId)) {
       throw new BadRequestException('Invalid notification ID');
     }
 
-    try {
-      const notification = await this.notificationModel
-        .findByIdAndUpdate(notificationId, updateNotificationDto, { new: true })
-        .lean()
-        .exec();
+    const notification = await this.notificationModel
+      .findByIdAndUpdate(notificationId, dto, { new: true })
+      .lean()
+      .exec();
 
-      if (!notification) {
-        throw new NotFoundException(
-          `Notification with ID ${notificationId} not found`,
-        );
-      }
-
-      return new NotificationResponseDto(notification);
-    } catch (error: unknown) {
-      if (error instanceof NotFoundException) {
-        throw error;
-      }
-      this.logger.error(
-        `Failed to update notification: ${notificationId}`,
-        error,
+    if (!notification) {
+      throw new NotFoundException(
+        `Notification with ID ${notificationId} not found`,
       );
-      throw new BadRequestException('Failed to update notification');
     }
+    return new NotificationResponseDto(notification);
+  }
+
+  // --- GET NOTIFICATION BY ID ---
+  async getNotificationById(
+    notificationId: string,
+  ): Promise<NotificationResponseDto> {
+    if (!Types.ObjectId.isValid(notificationId)) {
+      throw new BadRequestException('Invalid notification ID');
+    }
+
+    const notification = await this.notificationModel
+      .findById(notificationId)
+      .lean()
+      .exec();
+
+    if (!notification) {
+      throw new NotFoundException(
+        `Notification with ID ${notificationId} not found`,
+      );
+    }
+    return new NotificationResponseDto(notification);
   }
 }

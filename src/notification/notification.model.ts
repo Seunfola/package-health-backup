@@ -1,143 +1,20 @@
+import { Schema } from 'mongoose';
 import {
-  IsString,
-  IsEnum,
-  IsOptional,
-  IsUrl,
-  IsBoolean,
-  IsObject,
-  IsNumber,
-} from 'class-validator';
-import { Type } from 'class-transformer';
+  NOTIFICATION_TYPES,
+  NOTIFICATION_PRIORITIES,
+} from './notification.constants';
 
-export type NotificationType =
-  | 'SECURITY_VULNERABILITY'
-  | 'DEPENDENCY_UPDATE'
-  | 'NEW_ISSUE'
-  | 'PULL_REQUEST'
-  | 'SYSTEM_ALERT';
-
-export type NotificationPriority = 'low' | 'medium' | 'high' | 'critical';
-
-export class CreateNotificationDto {
-  @IsEnum([
-    'SECURITY_VULNERABILITY',
-    'DEPENDENCY_UPDATE',
-    'NEW_ISSUE',
-    'PULL_REQUEST',
-    'SYSTEM_ALERT',
-  ])
-  type: NotificationType;
-
-  @IsString()
-  repository: string;
-
-  @IsUrl()
-  repositoryUrl: string;
-
-  @IsString()
-  title: string;
-
-  @IsString()
-  @IsOptional()
-  description?: string;
-
-  @IsEnum(['low', 'medium', 'high', 'critical'])
-  priority: NotificationPriority;
-
-  @IsUrl()
-  @IsOptional()
-  detailsUrl?: string;
-
-  @IsBoolean()
-  @IsOptional()
-  read?: boolean;
-
-  @IsObject()
-  @IsOptional()
-  metadata?: Record<string, any>;
-}
-
-export class NotificationQueryDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  limit?: number = 10;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  offset?: number = 0;
-
-  @IsOptional()
-  @Type(() => Boolean)
-  @IsBoolean()
-  unreadOnly?: boolean = false;
-
-  @IsOptional()
-  @IsEnum([
-    'SECURITY_VULNERABILITY',
-    'DEPENDENCY_UPDATE',
-    'NEW_ISSUE',
-    'PULL_REQUEST',
-    'SYSTEM_ALERT',
-  ])
-  type?: NotificationType;
-
-  @IsOptional()
-  @IsEnum(['low', 'medium', 'high', 'critical'])
-  priority?: NotificationPriority;
-}
-
-export class UpdateNotificationDto {
-  @IsBoolean()
-  @IsOptional()
-  read?: boolean;
-
-  @IsObject()
-  @IsOptional()
-  metadata?: Record<string, any>;
-}
-
-export class NotificationResponseDto {
-  _id: string;
-  type: NotificationType;
-  repository: string;
-  repositoryUrl: string;
-  title: string;
-  description?: string;
-  priority: NotificationPriority;
-  detailsUrl?: string;
-  read: boolean;
-  createdAt: Date;
-  metadata?: Record<string, any>;
-
-  constructor(notification: {
-    _id?: string | { toString: () => string };
-    type: NotificationType;
-    repository: string;
-    repositoryUrl: string;
-    title: string;
-    description?: string;
-    priority: NotificationPriority;
-    detailsUrl?: string;
-    read: boolean;
-    createdAt: Date;
-    metadata?: Record<string, any>;
-  }) {
-    this._id = notification._id
-      ? typeof notification._id === 'string'
-        ? notification._id
-        : notification._id.toString()
-      : '';
-    this.type = notification.type;
-    this.repository = notification.repository;
-    this.repositoryUrl = notification.repositoryUrl;
-    this.title = notification.title;
-    this.description = notification.description;
-    this.priority = notification.priority;
-    this.detailsUrl = notification.detailsUrl;
-    this.read = notification.read;
-    this.createdAt = notification.createdAt;
-    this.metadata = notification.metadata;
-  }
-}
+export const NotificationSchema = new Schema(
+  {
+    type: { type: String, enum: NOTIFICATION_TYPES, required: true },
+    repository: { type: String, required: true },
+    repositoryUrl: { type: String, required: true },
+    title: { type: String, required: true },
+    description: { type: String },
+    priority: { type: String, enum: NOTIFICATION_PRIORITIES, required: true },
+    detailsUrl: { type: String },
+    read: { type: Boolean, default: false },
+    metadata: { type: Object },
+  },
+  { timestamps: true },
+);
