@@ -6,7 +6,10 @@ import {
   IsBoolean,
   IsObject,
   IsNumber,
-  IsIn, // add IsIn
+  IsIn,
+  Min,
+  Max,
+  Matches, // add IsIn
 } from 'class-validator';
 import {
   NOTIFICATION_TYPES,
@@ -18,6 +21,9 @@ export class CreateNotificationDto {
   type!: (typeof NOTIFICATION_TYPES)[number];
 
   @IsString()
+  @Matches(/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/, {
+    message: 'Repository must be in format "owner/repo"',
+  })
   repository!: string;
 
   @IsUrl()
@@ -60,11 +66,14 @@ export class NotificationQueryDto {
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(1)
+  @Max(100)
   limit?: number = 10;
 
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(0)
   offset?: number = 0;
 
   @IsOptional()

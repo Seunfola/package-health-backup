@@ -20,6 +20,7 @@ import {
   NotificationType,
 } from './notification.constants';
 import {
+  BulkOperationResponseDto,
   CreateNotificationDto,
   NotificationQueryDto,
   NotificationResponseDto,
@@ -51,7 +52,6 @@ export class NotificationService {
         repo,
       );
 
-      // Security alerts
       if (healthData.security_alerts > 0) {
         notifications.push({
           type: 'SECURITY_VULNERABILITY',
@@ -69,7 +69,6 @@ export class NotificationService {
         });
       }
 
-      // Dependency health
       if (healthData.dependency_health < 70) {
         const priority: NotificationPriority =
           healthData.dependency_health < 40 ? 'high' : 'medium';
@@ -353,7 +352,7 @@ export class NotificationService {
     return new NotificationResponseDto(notification);
   }
 
-  // --- GET NOTIFICATION BY ID ---
+  // GET NOTIFICATION BY ID
   async getNotificationById(
     notificationId: string,
   ): Promise<NotificationResponseDto> {
@@ -372,5 +371,120 @@ export class NotificationService {
       );
     }
     return new NotificationResponseDto(notification);
+  }
+
+  async markMultipleAsRead(
+    notificationIds: string[],
+  ): Promise<BulkOperationResponseDto> {
+    // Validate all IDs
+    const invalidIds = notificationIds.filter(
+      (id) => !Types.ObjectId.isValid(id),
+    );
+    if (invalidIds.length > 0) {
+      throw new BadRequestException(
+        `Invalid notification IDs: ${invalidIds.join(', ')}`,
+      );
+    }
+
+    const result = await this.notificationModel
+      .updateMany({ _id: { $in: notificationIds } }, { read: true })
+      .exec();
+
+    return new BulkOperationResponseDto({
+      success: true,
+      message: `Successfully marked ${result.modifiedCount} notifications as read`,
+      affectedIds: notificationIds,
+      count: result.modifiedCount,
+    });
+  }
+
+  async deleteMultipleNotifications(
+    notificationIds: string[],
+  ): Promise<BulkOperationResponseDto> {
+    // Validate all IDs
+    const invalidIds = notificationIds.filter(
+      (id) => !Types.ObjectId.isValid(id),
+    );
+    if (invalidIds.length > 0) {
+      throw new BadRequestException(
+        `Invalid notification IDs: ${invalidIds.join(', ')}`,
+      );
+    }
+
+    const result = await this.notificationModel
+      .deleteMany({ _id: { $in: notificationIds } })
+      .exec();
+
+    return new BulkOperationResponseDto({
+      success: true,
+      message: `Successfully deleted ${result.deletedCount} notifications`,
+      affectedIds: notificationIds,
+      count: result.deletedCount,
+    });
+  }
+
+  // NOTIFICATION STATISTICS
+  async getUnreadCount(): Promise<{ count: number }> {
+    const count = await this.notificationModel.countDocuments({ read: false });
+    return { count };
+  }
+
+  async getNotificationsByRepository(
+    repository: string,
+  ): Promise<NotificationResponseDto[]> {
+    const notifications = await this.notificationModel
+      .find({ repository })
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+
+    return notifications.map((n) => new NotificationResponseDto(n));
+  }
+
+  // ADVANCED FILTERING
+  async searchNotifications(
+    searchTerm: string,
+    options?: NotificationQueryDto,
+  ): Promise<NotificationResponseDto[]> {
+    const { limit = 20, offset = 0, ...filters } = options ?? {};
+
+    const query: FilterQuery<INotification> = {
+      ...filters,
+      $or: [
+        { title: { $regex: searchTerm, $options: 'i' } },
+        { description: { $regex: searchTerm, $options: 'i' } },
+        { repository: { $regex: searchTerm, $options: 'i' } },
+      ],
+    };
+
+    const notifications = await this.notificationModel
+      .find(query)
+      .sort({ createdAt: -1 })
+      .skip(Math.max(offset, 0))
+      .limit(Math.min(Math.max(limit, 1), 100))
+      .lean()
+      .exec();
+
+    return notifications.map((n) => new NotificationResponseDto(n));
+  }
+
+  // NOTIFICATION CLEANUP
+  async cleanupOldNotifications(
+    daysOld: number = 30,
+  ): Promise<{ deletedCount: number }> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+
+    const result = await this.notificationModel
+      .deleteMany({
+        createdAt: { $lt: cutoffDate },
+        read: true, // Only delete read notifications
+      })
+      .exec();
+
+    this.logger.log(
+      `Cleaned up ${result.deletedCount} notifications older than ${daysOld} days`,
+    );
+    return { deletedCount: result.deletedCount };
   }
 }
