@@ -52,8 +52,51 @@ export class UserPreferencesService {
       case 'inApp':
         return preferences.notificationPreferences.inAppNotifications;
       default:
-        return true; // Default to true for unknown types
+        return true;
     }
+  }
+
+  getDefaults(): any {
+    return {
+      dashboardMetrics: {
+        codeQualityScore: true,
+        testCoverage: true,
+        dependencyVulnerabilities: true,
+        securityAlerts: true,
+      },
+      notificationPreferences: {
+        emailNotifications: true,
+        inAppNotifications: true,
+        securityAlertThreshold: 70,
+        dependencyUpdateFrequency: 'daily',
+      },
+    };
+  }
+
+  getDefaultPreferences(): UserPreferences {
+    return {
+      userId: '',
+      ...this.getDefaults(), // Use the getDefaults method
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as UserPreferences;
+  }
+
+  async resetToDefaults(userId: string): Promise<UserPreferences> {
+    const defaultPreferences = new this.preferencesModel().toObject();
+
+    return this.preferencesModel.findOneAndUpdate(
+      { userId },
+      {
+        $set: {
+          dashboardMetrics: (defaultPreferences as UserPreferences)
+            .dashboardMetrics,
+          notificationPreferences: (defaultPreferences as UserPreferences)
+            .notificationPreferences,
+        },
+      },
+      { new: true, upsert: true, runValidators: true },
+    );
   }
 
   async getSecurityAlertThreshold(userId: string): Promise<number> {

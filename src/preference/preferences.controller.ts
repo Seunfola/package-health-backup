@@ -1,5 +1,15 @@
 // preferences.controller.ts
-import { Controller, Get, Put, Body, Request, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Put,
+  Body,
+  Request,
+  UseGuards,
+  Post,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UserPreferencesService } from './preferences.service';
 import {
@@ -7,33 +17,85 @@ import {
   PreferencesResponseDto,
 } from './preferences.dto';
 
+// Define proper types
+interface AuthenticatedRequest {
+  user: {
+    id: string;
+  };
+}
+
 @Controller('user/preferences')
 @UseGuards(JwtAuthGuard)
 export class UserPreferencesController {
   constructor(private readonly preferencesService: UserPreferencesService) {}
 
+  @Get('defaults')
+  getDefaultPreferences(): PreferencesResponseDto {
+    try {
+      const defaults = this.preferencesService.getDefaultPreferences();
+      return new PreferencesResponseDto(defaults);
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        throw new HttpException(
+          error.message,
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
+      throw new HttpException(
+        'Failed to fetch default preferences',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  @Post('reset')
+  async resetPreferences(
+    @Request() req: AuthenticatedRequest,
+  ): Promise<PreferencesResponseDto> {
+    try {
+      const userId = req.user.id; // Type-safe access
+      const preferences = await this.preferencesService.resetToDefaults(userId);
+      return new PreferencesResponseDto(preferences);
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to reset preferences';
+      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
   @Get()
-  async getPreferences(@Request() req: { user: { id: string } }) {
-    const userId = req?.user?.id;
-    const preferences =
-      await this.preferencesService.getUserPreferences(userId);
-    return new PreferencesResponseDto(preferences);
+  async getPreferences(
+    @Request() req: AuthenticatedRequest,
+  ): Promise<PreferencesResponseDto> {
+    try {
+      const userId = req.user.id; // Type-safe access
+      const preferences =
+        await this.preferencesService.getUserPreferences(userId);
+      return new PreferencesResponseDto(preferences);
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to fetch preferences';
+      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   @Put()
   async updatePreferences(
-    @Request() req,
+    @Request() req: AuthenticatedRequest,
     @Body() updatePreferencesDto: UpdatePreferencesDto,
-  ) {
-    const userId: string | undefined = (req as { user?: { id?: string } })?.user
-      ?.id;
-    if (!userId) {
-      throw new Error('User id is missing in the request');
+  ): Promise<PreferencesResponseDto> {
+    try {
+      const userId = req.user.id; // Type-safe access
+
+      const preferences = await this.preferencesService.updateUserPreferences(
+        userId,
+        updatePreferencesDto,
+      );
+      return new PreferencesResponseDto(preferences);
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to update preferences';
+      throw new HttpException(message, HttpStatus.BAD_REQUEST);
     }
-    const preferences = await this.preferencesService.updateUserPreferences(
-      userId,
-      updatePreferencesDto,
-    );
-    return new PreferencesResponseDto(preferences);
   }
 }
