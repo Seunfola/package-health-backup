@@ -9,7 +9,6 @@ export class GitHubStrategy extends PassportStrategy(Strategy, 'github') {
     const clientSecret = process.env.GITHUB_CLIENT_SECRET;
     const callbackURL = process.env.GITHUB_CALLBACK_URL;
 
-    // ✅ Ensure none are undefined before calling super
     if (!clientID || !clientSecret || !callbackURL) {
       throw new Error(
         'GitHub OAuth environment variables (CLIENT_ID, CLIENT_SECRET, CALLBACK_URL) must be set',

@@ -26,6 +26,8 @@ import {
   NotificationResponseDto,
   UpdateNotificationDto,
 } from './notification.dto';
+import { UserPreferencesService } from 'src/preference/preferences.service';
+import { UserPreferences } from 'src/preference/preferences.interface';
 
 @Injectable()
 export class NotificationService {
@@ -35,12 +37,14 @@ export class NotificationService {
     @InjectModel('Notification')
     private readonly notificationModel: Model<INotification>,
     private readonly repoHealthService: RepoHealthService,
+    private readonly userPreferencesService: UserPreferencesService,
   ) {}
 
   // GENERATE NOTIFICATIONS FOR A REPO
   async generateNotificationsForRepo(
     owner: string,
     repo: string,
+    userId?: string,
   ): Promise<NotificationResponseDto[]> {
     const notifications: CreateNotificationDto[] = [];
     const repoUrl = `https://github.com/${owner}/${repo}`;
@@ -52,45 +56,67 @@ export class NotificationService {
         repo,
       );
 
+      // Get user preferences if userId is provided
+      let userPreferences: UserPreferences | null = null;
+      if (userId) {
+        userPreferences =
+          await this.userPreferencesService.getUserPreferences(userId);
+      }
+
+      // Security alerts - check user preferences
       if (healthData.security_alerts > 0) {
-        notifications.push({
-          type: 'SECURITY_VULNERABILITY',
-          repository: repoId,
-          repositoryUrl: repoUrl,
-          title: `Security Alert: ${healthData.security_alerts} vulnerability(s) detected`,
-          description: `Your repository has ${healthData.security_alerts} security vulnerability(s) that need attention.`,
-          priority: healthData.security_alerts > 5 ? 'critical' : 'high',
-          detailsUrl: `${repoUrl}/security/advisories`,
-          read: false,
-          metadata: {
-            alertCount: healthData.security_alerts,
-            lastScanned: healthData.last_pushed,
-          },
-        });
+        const shouldShowSecurityAlert =
+          !userPreferences || userPreferences.dashboardMetrics.securityAlerts;
+
+        if (shouldShowSecurityAlert) {
+          notifications.push({
+            type: 'SECURITY_VULNERABILITY',
+            repository: repoId,
+            repositoryUrl: repoUrl,
+            title: `Security Alert: ${healthData.security_alerts} vulnerability(s) detected`,
+            description: `Your repository has ${healthData.security_alerts} security vulnerability(s) that need attention.`,
+            priority: healthData.security_alerts > 5 ? 'critical' : 'high',
+            detailsUrl: `${repoUrl}/security/advisories`,
+            read: false,
+            metadata: {
+              alertCount: healthData.security_alerts,
+              lastScanned: healthData.last_pushed,
+              userId: userId,
+            },
+          });
+        }
       }
 
+      // Dependency health - check user preferences
       if (healthData.dependency_health < 70) {
-        const priority: NotificationPriority =
-          healthData.dependency_health < 40 ? 'high' : 'medium';
-        notifications.push({
-          type: 'DEPENDENCY_UPDATE',
-          repository: repoId,
-          repositoryUrl: repoUrl,
-          title: `Dependency Health: ${healthData.dependency_health}% - Needs Improvement`,
-          description: `Your dependencies are ${
-            100 - healthData.dependency_health
-          }% below optimal health. Consider updating outdated packages.`,
-          priority,
-          detailsUrl: `${repoUrl}/network/dependencies`,
-          read: false,
-          metadata: {
-            healthScore: healthData.dependency_health,
-            riskyDependencies: healthData.risky_dependencies || [],
-          },
-        });
+        const shouldShowDependencyAlert =
+          !userPreferences ||
+          userPreferences.dashboardMetrics.dependencyVulnerabilities;
+
+        if (shouldShowDependencyAlert) {
+          const priority: NotificationPriority =
+            healthData.dependency_health < 40 ? 'high' : 'medium';
+          notifications.push({
+            type: 'DEPENDENCY_UPDATE',
+            repository: repoId,
+            repositoryUrl: repoUrl,
+            title: `Dependency Health: ${healthData.dependency_health}% - Needs Improvement`,
+            description: `Your dependencies are ${
+              100 - healthData.dependency_health
+            }% below optimal health. Consider updating outdated packages.`,
+            priority,
+            detailsUrl: `${repoUrl}/network/dependencies`,
+            read: false,
+            metadata: {
+              healthScore: healthData.dependency_health,
+              riskyDependencies: healthData.risky_dependencies || [],
+              userId: userId,
+            },
+          });
+        }
       }
 
-      // Overall health
+      // Overall health - check user preferences
       let overallScore: number | null = null;
       let overallLabel: string | undefined;
 
@@ -120,20 +146,29 @@ export class NotificationService {
       }
 
       if (overallScore !== null && overallScore < 60) {
-        notifications.push({
-          type: 'SYSTEM_ALERT',
-          repository: repoId,
-          repositoryUrl: repoUrl,
-          title: `Repository Health: ${overallScore}% - ${overallLabel ?? 'Needs Improvement'}`,
-          description: `Your repository health score indicates areas that need improvement for better maintainability and security.`,
-          priority: overallScore < 40 ? 'high' : 'medium',
-          detailsUrl: repoUrl,
-          read: false,
-          metadata: { healthScore: overallScore, healthLabel: overallLabel },
-        });
+        const shouldShowHealthAlert =
+          !userPreferences || userPreferences.dashboardMetrics.codeQualityScore;
+
+        if (shouldShowHealthAlert) {
+          notifications.push({
+            type: 'SYSTEM_ALERT',
+            repository: repoId,
+            repositoryUrl: repoUrl,
+            title: `Repository Health: ${overallScore}% - ${overallLabel ?? 'Needs Improvement'}`,
+            description: `Your repository health score indicates areas that need improvement for better maintainability and security.`,
+            priority: overallScore < 40 ? 'high' : 'medium',
+            detailsUrl: repoUrl,
+            read: false,
+            metadata: {
+              healthScore: overallScore,
+              healthLabel: overallLabel,
+              userId: userId,
+            },
+          });
+        }
       }
 
-      // Inactivity alert
+      // Inactivity alert - this is always shown (system-level alert)
       const lastPushed = new Date(healthData.last_pushed);
       const daysSinceLastPush =
         (Date.now() - lastPushed.getTime()) / (1000 * 60 * 60 * 24);
@@ -152,12 +187,18 @@ export class NotificationService {
           metadata: {
             daysSinceLastPush: Math.floor(daysSinceLastPush),
             lastPushDate: lastPushed,
+            userId: userId,
           },
         });
       }
 
       if (notifications.length > 0) {
         const saved = await this.notificationModel.insertMany(notifications);
+
+        if (userId) {
+          await this.sendNotificationsBasedOnPreferences(userId, saved);
+        }
+
         return saved.map((n) => new NotificationResponseDto(n.toObject()));
       }
     } catch (err: unknown) {
@@ -172,7 +213,6 @@ export class NotificationService {
 
     return [];
   }
-
   // GET USER NOTIFICATIONS
   async getUserNotifications(
     options?: NotificationQueryParams | NotificationQueryDto,
@@ -486,5 +526,62 @@ export class NotificationService {
       `Cleaned up ${result.deletedCount} notifications older than ${daysOld} days`,
     );
     return { deletedCount: result.deletedCount };
+  }
+
+  private async sendNotificationsBasedOnPreferences(
+    userId: string,
+    notifications: any[],
+  ) {
+    try {
+      const preferences =
+        await this.userPreferencesService.getUserPreferences(userId);
+
+      for (const notification of notifications) {
+        // In-app notifications (always stored in DB)
+        if (preferences.notificationPreferences.inAppNotifications) {
+          // Notification is already stored in database for in-app display
+          this.logger.log(`In-app notification created for user ${userId}`);
+        }
+
+        // Email notifications
+        if (preferences.notificationPreferences.emailNotifications) {
+          await this.sendEmailNotification(userId, notification);
+        }
+
+        // Check security threshold
+        if (
+          (notification as { type?: string }).type === 'SECURITY_VULNERABILITY'
+        ) {
+          const securityThreshold =
+            preferences.notificationPreferences.securityAlertThreshold;
+          const alertCount =
+            (notification as { metadata?: { alertCount?: number } }).metadata
+              ?.alertCount ?? 0;
+
+          if (alertCount > securityThreshold) {
+            this.logger.log(
+              `High priority security alert for user ${userId}: ${alertCount} vulnerabilities`,
+            );
+            // Could trigger additional actions like Slack/webhook notifications
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        'Error sending notifications based on preferences:',
+        error,
+      );
+    }
+  }
+
+  private async sendEmailNotification(
+    userId: string,
+    notification: { title: string },
+  ) {
+    // Implement your email sending logic here
+    await Promise.resolve(); // Placeholder for actual async email sending logic
+    this.logger.log(
+      `Would send email to user ${userId} for notification: ${notification.title}`,
+    );
   }
 }

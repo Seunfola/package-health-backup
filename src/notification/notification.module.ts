@@ -4,6 +4,7 @@ import { NotificationService } from './notification.service';
 import { NotificationController } from './notification.controller';
 import { NotificationSchema } from './notification.model';
 import { RepoHealthModule } from '../repo-health/repo-health.module';
+import { UserPreferencesModule } from 'src/preference/preferences.module';
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -12,6 +13,7 @@ import { RepoHealthModule } from '../repo-health/repo-health.module';
         schema: NotificationSchema,
       },
     ]),
+    UserPreferencesModule,
     RepoHealthModule,
   ],
   providers: [NotificationService],
