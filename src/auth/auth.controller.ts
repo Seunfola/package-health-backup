@@ -8,7 +8,7 @@ export class AuthController {
   @Get('github')
   @UseGuards(AuthGuard('github'))
   @ApiOperation({ summary: 'Redirect user to GitHub login' })
-  login() {
+  githubLogin() {
     // Redirect handled by Passport
   }
 

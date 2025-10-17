@@ -1,18 +1,29 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+import 'dotenv/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { EventEmitter } from 'events';
+import { TLSSocket } from 'tls';
+
+(TLSSocket.prototype as unknown as EventEmitter).setMaxListeners(50);
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  const corsOrigin = process.env.CORS_ORIGIN;
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  const corsOrigin = isProduction
+    ? process.env.CORS_ORIGIN_PROD
+    : process.env.CORS_ORIGIN_DEV;
+
   if (!corsOrigin) {
-    throw new Error('CORS_ORIGIN env variable is not set!');
+    throw new Error(`CORS_ORIGIN_${isProduction ? 'PROD' : 'DEV'} is not set!`);
   }
 
   app.enableCors({
     origin: corsOrigin,
+    credentials: true,
   });
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));

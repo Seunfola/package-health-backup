@@ -76,8 +76,6 @@ export class RepoHealthService {
     }
   }
 
-  // Add these methods to RepoHealthService class
-
   async findOne(
     owner: string,
     repo: string,
@@ -103,7 +101,6 @@ export class RepoHealthService {
     try {
       const { owner, repo, minHealthScore, limit = 50, offset = 0 } = query;
 
-      // Give mongoQuery a clear type
       const mongoQuery: Record<string, unknown> = {};
 
       if (owner) {
@@ -144,13 +141,11 @@ export class RepoHealthService {
     }
   }
 
-  // For notification service integration
   async getAllRepoStatuses(): Promise<any[]> {
     try {
       const repos = await this.repoHealthModel.find().lean().exec();
       return repos.map((repo) => ({
         ...repo,
-        // Ensure compatibility with notification service expected structure
         vulnerabilities: Array.from(
           { length: repo.security_alerts || 0 },
           (_, i) => ({
@@ -188,19 +183,17 @@ export class RepoHealthService {
     rawJson?: string | Record<string, unknown>,
     token?: string,
   ) {
-    // fetch metadata with retries and caching
     const repoKey = `repo:${owner}/${repo}`;
     const repoData = await this.requestWithCache<GitHubRepoResponse>(
       repoKey,
       () => this.fetchRepo(owner, repo, token),
-      1000 * 60 * 5, // 5m cache
+      1000 * 60 * 5,
     );
 
-    // fetch commit activity and alerts (also cached briefly)
     const commitActivity = await this.requestWithCache<CommitActivityItem[]>(
       `commits:${owner}/${repo}`,
       () => this.fetchCommitActivity(owner, repo, token),
-      1000 * 60 * 3, // 3m
+      1000 * 60 * 3,
     );
 
     const securityAlerts = await this.requestWithCache<any[]>(
@@ -209,7 +202,6 @@ export class RepoHealthService {
       1000 * 60 * 3,
     );
 
-    // process dependencies (file/rawJson)
     const { dependencyHealth, riskyDependencies } =
       await this._processDependencies(file, rawJson, this.dockerAvailable);
 
@@ -286,11 +278,8 @@ export class RepoHealthService {
     rawJson?: string | Record<string, unknown>,
     token?: string,
   ) {
-    const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
-    if (!match) {
-      throw new HttpException('Invalid GitHub URL', HttpStatus.BAD_REQUEST);
-    }
-    const [, owner, repo] = match;
+    const { owner, repo } = this.parseGitHubUrl(url);
+
     return this.analyzeRepo(owner, repo, file, rawJson, token);
   }
 
@@ -393,6 +382,34 @@ export class RepoHealthService {
     }
   }
 
+  private parseGitHubUrl(url: string): { owner: string; repo: string } {
+    try {
+      url = url
+        .trim()
+        .replace(/\.git$/, '')
+        .replace(/\/$/, '');
+
+      const match =
+        url.match(/github\.com[:/](?<owner>[^/]+)\/(?<repo>[^/]+)(?:$|\/)/) ??
+        url.match(/git@github\.com:(?<owner>[^/]+)\/(?<repo>[^/]+)/);
+
+      if (!match?.groups) {
+        throw new HttpException(
+          'Invalid GitHub repository URL',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      const { owner, repo } = match.groups;
+      return { owner, repo };
+    } catch {
+      throw new HttpException(
+        'Invalid GitHub repository URL',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+  }
+
   private async fetchRepo(
     owner: string,
     repo: string,
@@ -400,9 +417,13 @@ export class RepoHealthService {
   ): Promise<GitHubRepoResponse> {
     try {
       const headers: Record<string, string> = {
-        Accept: 'application/vnd.github+json',
+        Accept: 'application/vnd.github.v3+json',
+        'User-Agent': 'package-health-service',
       };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const authToken = token?.trim() || process.env.GITHUB_TOKEN;
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
       const url = `https://api.github.com/repos/${owner}/${repo}`;
       const res = await lastValueFrom(
         this.httpService.get<GitHubRepoResponse>(url, { headers }),
