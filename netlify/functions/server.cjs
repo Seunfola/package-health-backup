@@ -1,6 +1,6 @@
 /* eslint-disable */
 const serverless = require('serverless-http');
-const app = require('../dist/src/main').default;
+const app = require('../dist/main').default;
 const appPromise = Promise.resolve(serverless(app));
 
 let cachedServer;
