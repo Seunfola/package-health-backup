@@ -3,6 +3,7 @@ import {
   Logger,
   BadRequestException,
   NotFoundException,
+  Inject,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, FilterQuery } from 'mongoose';
@@ -12,7 +13,7 @@ import {
   NotificationQueryParams,
   Notification as INotification,
 } from './notification.interface';
-
+import type { Cache } from 'cache-manager';
 import {
   NOTIFICATION_TYPES,
   NOTIFICATION_PRIORITIES,
@@ -28,6 +29,7 @@ import {
 } from './notification.dto';
 import { UserPreferencesService } from 'src/preference/preferences.service';
 import { UserPreferences } from 'src/preference/preferences.interface';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 
 @Injectable()
 export class NotificationService {
@@ -38,6 +40,7 @@ export class NotificationService {
     private readonly notificationModel: Model<INotification>,
     private readonly repoHealthService: RepoHealthService,
     private readonly userPreferencesService: UserPreferencesService,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   // GENERATE NOTIFICATIONS FOR A REPO
@@ -252,6 +255,9 @@ export class NotificationService {
 
   // GET SUMMARY
   async getNotificationSummary(): Promise<INotificationSummary> {
+    const cacheKey = 'notification:summary';
+    const cached = await this.cacheManager.get<INotificationSummary>(cacheKey);
+    if (cached) return cached;
     try {
       const [total, unread, byTypeRaw, byPriorityRaw] = await Promise.all([
         this.notificationModel.countDocuments(),
@@ -292,8 +298,10 @@ export class NotificationService {
           byPriority[item._id] = item.count;
         }
       });
+      const summary = { total, unread, byType, byPriority };
+      await this.cacheManager.set(cacheKey, summary, 60 * 2);
 
-      return { total, unread, byType, byPriority };
+      return summary;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       this.logger.error('Failed to get notification summary', { message });
