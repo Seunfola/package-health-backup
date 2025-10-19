@@ -71,6 +71,9 @@ importers:
       dotenv:
         specifier: ^17.2.3
         version: 17.2.3
+      file-type:
+        specifier: ^21.0.0
+        version: 21.0.0
       fs-extra:
         specifier: ^11.3.2
         version: 11.3.2
