@@ -1,0 +1,6 @@
+netlify/
+dist/
+node_modules/
+*.cjs
+dist/**/*.js
+netlify/**/*.js

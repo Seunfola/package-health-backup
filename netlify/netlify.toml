@@ -1,0 +1,7 @@
+[build]
+  command = "nest build && cp -r dist/* netlify/functions/"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  directory = "netlify/functions"

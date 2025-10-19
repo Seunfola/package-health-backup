@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -17,8 +18,14 @@ import { UserPreferencesModule } from './preference/preferences.module';
       envFilePath: '.env',
     }),
 
-    DatabaseModule,
+    // Add TTL-based in-memory cache
+    CacheModule.register({
+      ttl: 60 * 5,
+      max: 100,
+      isGlobal: true,
+    }),
 
+    DatabaseModule,
     RepoHealthModule,
     AuthModule,
     UserProfileModule,
