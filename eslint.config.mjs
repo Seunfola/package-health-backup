@@ -24,7 +24,6 @@ export default [
       'prettier/prettier': ['error', { endOfLine: 'auto' }],
     },
   },
-  // 🔥 YOUR SERVER.CJS OVERRIDE
   {
     files: ['netlify/functions/server.cjs'],
     rules: {

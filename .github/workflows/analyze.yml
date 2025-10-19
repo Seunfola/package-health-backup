@@ -1,0 +1,127 @@
+name: 🔍 Repository Health Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner:
+        description: 'GitHub Owner (e.g., Pacakage-Health)'
+        required: true
+        default: 'Package-Health'
+      repo:
+        description: 'Repository Name (e.g., nest.js)'
+        required: true
+        default: 'nest.js'
+      token:
+        description: 'GitHub Token (optional for private repos)'
+        required: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      # Setup Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'  # Works for all package managers!
+
+      # UNIVERSAL INSTALL - Works with npm/yarn/pnpm!
+      - name: Install Tools (Universal)
+        run: |
+          # Auto-detect package manager and install
+          if [ -f yarn.lock ]; then
+            echo "🧶 Using Yarn"
+            yarn global add ts-node yargs @types/node axios @nestjs/axios rxjs
+          elif [ -f pnpm-lock.yaml ]; then
+            echo "⚡ Using pnpm"
+            pnpm add -g ts-node yargs @types/node axios @nestjs/axios rxjs
+          else
+            echo "📦 Using npm"
+            npm install -g ts-node yargs @types/node axios @nestjs/axios rxjs
+          fi
+
+      # Run YOUR analysis script
+      - name: Analyze Repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CUSTOM_TOKEN: ${{ inputs.token }}
+        run: |
+          npx ts-node scripts/analyze-repo.ts \
+            --url "https://github.com/${{ inputs.owner }}/${{ inputs.repo }}" \
+            --token "$CUSTOM_TOKEN"
+
+      # Generate beautiful HTML report (same as before)
+      - name: Generate HTML Report
+        run: |
+          cat > report.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head><title>Repo Health Report</title>
+          <style>
+            body{font-family:Arial;margin:40px;background:#f5f5f5}
+            .container{max-width:800px;margin:auto;background:white;padding:30px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.1)}
+            h1{color:#1a73e8;text-align:center}
+            .score{display:inline-block;width:100px;height:100px;border-radius:50%;text-align:center;line-height:100px;font-size:24px;font-weight:bold;margin:20px}
+            .excellent{background:#4caf50;color:white}.good{background:#8bc34a;color:white}.fair{background:#ff9800;color:white}.poor{background:#f44336;color:white}
+            table{width:100%;border-collapse:collapse;margin:20px 0}
+            th,td{border:1px solid #ddd;padding:12px;text-align:left}
+            th{background:#f8f9fa}
+            .metric{color:#1a73e8;font-weight:bold}
+          </style></head>
+          <body>
+          <div class="container">
+          <h1>📊 Repository Health Report</h1>
+          <div id="score" class="score">Loading...</div>
+          <table id="metrics"></table>
+          <pre id="raw-json"></pre>
+          </div>
+          <script>
+            fetch('health-report.json').then(r=>r.json()).then(data=>{
+              const scoreClass = data.overall_health.score >= 90 ? 'excellent' : 
+                                data.overall_health.score >= 70 ? 'good' :
+                                data.overall_health.score >= 50 ? 'fair' : 'poor';
+              document.getElementById('score').innerHTML = data.overall_health.score + '<br>/100';
+              document.getElementById('score').className = 'score ' + scoreClass;
+              document.getElementById('raw-json').textContent = JSON.stringify(data, null, 2);
+              
+              const metrics = [
+                ['⭐ Stars', data.stars],
+                ['🍴 Forks', data.forks],
+                ['🐛 Open Issues', data.open_issues],
+                ['🚨 Security Alerts', data.security_alerts],
+                ['📦 Dependency Health', data.dependency_health + '/100'],
+                ['⚠️ Risky Dependencies', data.risky_dependencies.length]
+              ];
+              
+              let html = '<tr><th>Metric</th><th>Value</th></tr>';
+              metrics.forEach(([name, value]) => {
+                html += `<tr><td class="metric">${name}</td><td>${value}</td></tr>`;
+              });
+              document.getElementById('metrics').innerHTML = html;
+            });
+          </script>
+          </body></html>
+          EOF
+
+      # Upload artifacts
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: repo-health-report-${{ inputs.owner }}-${{ inputs.repo }}
+          path: |
+            health-report.json
+            report.html
+          retention-days: 90
+
+      #  Create GitHub Release (optional)
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: "Health Report: ${{ inputs.owner }}/${{ inputs.repo }}"
+          body_path: health-report.json
+          draft: false
+          prerelease: false
