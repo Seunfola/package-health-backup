@@ -202,8 +202,11 @@ export class RepoHealthService {
       1000 * 60 * 3,
     );
 
-    const { dependencyHealth, riskyDependencies } =
-      await this._processDependencies(file, rawJson, this.dockerAvailable);
+    // ✅ REAL ANALYSIS!
+    const deps = this._getDependencies(file, rawJson);
+    const analysis = await this.dependencyAnalyzer.analyzeDependencies(deps);
+    const dependencyHealth = analysis.score;
+    const riskyDependencies = analysis.risky;
 
     const overallHealth = this._calculateHealthScore(
       repoData,
@@ -236,6 +239,10 @@ export class RepoHealthService {
         dependency_health: dependencyHealth,
         risky_dependencies: riskyDependencies,
         overall_health: overallHealth,
+        bundle_size: analysis.bundleSize,
+        license_risks: analysis.licenseRisks,
+        popularity: analysis.popularity,
+        days_behind: analysis.daysBehind || 0,
       },
       { new: true, upsert: true, setDefaultsOnInsert: true },
     );
@@ -247,7 +254,7 @@ export class RepoHealthService {
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
   ): Promise<{ dependencyHealth: number; riskyDependencies: string[] }> {
-    return this._processDependencies(file, rawJson, this.dockerAvailable);
+    return this._processDependencies(file, rawJson);
   }
 
   async getCommitActivity(owner: string, repo: string, token?: string) {
@@ -311,10 +318,18 @@ export class RepoHealthService {
     };
   }
 
+  private _getDependencies(
+    file?: Express.Multer.File,
+    rawJson?: string | Record<string, unknown>,
+  ) {
+    if (rawJson) return this._getDependenciesFromJson(rawJson);
+    if (file) return this._getDependenciesFromFile(file);
+    return {};
+  }
+
   private async _processDependencies(
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
-    useDocker = false,
   ): Promise<{ dependencyHealth: number; riskyDependencies: string[] }> {
     let deps: Record<string, string> = {};
 
@@ -330,10 +345,7 @@ export class RepoHealthService {
 
     const release = await this.analysisSemaphore.acquire();
     try {
-      const analysis = await this.dependencyAnalyzer.analyzeDependencies(
-        deps,
-        useDocker ? { useDocker } : undefined,
-      );
+      const analysis = await this.dependencyAnalyzer.analyzeDependencies(deps);
       return {
         dependencyHealth:
           typeof analysis?.score === 'number' ? analysis.score : 100,
