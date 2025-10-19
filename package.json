@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "nest build",
-    "build:netlify": "nest build && cp -r netlify/functions dist/netlify/functions",
+    "build:netlify": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
