@@ -1,16 +1,7 @@
 [build]
-  command = "npm run build && cp -r netlify dist/"
+  command = "nest build && cp -r dist/* netlify/functions/"
   publish = "dist"
-
-[build.environment]
-  NODE_VERSION = "20"
-
-# Redirect all requests to our serverless function
-[[redirects]]
-  from = "/*"
-  to = "/.netlify/functions/server"
-  status = 200
+  functions = "netlify/functions"
 
 [functions]
-  directory = "dist/netlify/functions"
-  node_bundler = "esbuild"
+  directory = "netlify/functions"
