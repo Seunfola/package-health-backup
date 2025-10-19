@@ -9,6 +9,16 @@
 3. **Works automatically** with **your package manager!**
 4. **Actions tab** → Run → Enter `vercel/next.js` → **Download HTML!**
 
+## 🤖 Auto-Analysis (Bonus!)
+
+**For repo owners**: Add to your repo for **daily auto-reports**!
+
+Copy this to your workflow:
+
+```yaml
+- name: Auto-Analyze
+  run: npx ts-node scripts/background-runner.ts
+
 ## 🎯 **Universal Package Manager Support**
 
 | Package Manager | Lockfile | Command | ✅ Status |

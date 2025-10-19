@@ -2,4 +2,5 @@ netlify/
 dist/
 node_modules/
 *.cjs
-*.js
+dist/**/*.js
+netlify/**/*.js

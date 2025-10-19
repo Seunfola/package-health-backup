@@ -20,26 +20,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Setup Node.js
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'  # Works for all package managers!
+          cache: 'npm' # or remove to auto-detect based on lock files
 
       # UNIVERSAL INSTALL - Works with npm/yarn/pnpm!
       - name: Install Tools (Universal)
         run: |
           # Auto-detect package manager and install
-          if [ -f yarn.lock ]; then
-            echo "🧶 Using Yarn"
-            yarn global add ts-node yargs @types/node axios @nestjs/axios rxjs
-          elif [ -f pnpm-lock.yaml ]; then
-            echo "⚡ Using pnpm"
-            pnpm add -g ts-node yargs @types/node axios @nestjs/axios rxjs
-          else
-            echo "📦 Using npm"
-            npm install -g ts-node yargs @types/node axios @nestjs/axios rxjs
-          fi
+          npm install -g ts-node
 
       # Run YOUR analysis script
       - name: Analyze Repository
@@ -112,16 +106,17 @@ jobs:
           path: |
             health-report.json
             report.html
-          retention-days: 90
-
-      #  Create GitHub Release (optional)
       - name: Create Release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ github.run_number }}
           release_name: "Health Report: ${{ inputs.owner }}/${{ inputs.repo }}"
-          body_path: health-report.json
+          body: "Health report generated for ${{ inputs.owner }}/${{ inputs.repo }}"
           draft: false
           prerelease: false
+          files: |
+            health-report.json
+            report.html
+            body_path: health-report.json

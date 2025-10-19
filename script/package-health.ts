@@ -1,7 +1,7 @@
-#!/usr/bin/env ts-node
 /* eslint-disable @typescript-eslint/no-unused-vars */
 
 import yargs from 'yargs';
+import * as fs from 'fs';
 import { hideBin } from 'yargs/helpers';
 import { HttpService } from '@nestjs/axios';
 import { Model } from 'mongoose';
@@ -148,7 +148,7 @@ async function main() {
 
     console.log(`🚀 Starting analysis for ${owner}/${repo} ...`);
 
-    // ✅ Just pass owner, repo, and token
+    // Just pass owner, repo, and token
     const result = await repoHealthService.analyzeRepo(
       owner,
       repo,
@@ -156,6 +156,8 @@ async function main() {
       undefined,
       token,
     );
+
+    fs.writeFileSync('health-report.json', JSON.stringify(result, null, 2));
 
     console.log('\n Analysis Result:\n');
     console.log(JSON.stringify(result, null, 2));
