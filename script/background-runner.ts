@@ -12,7 +12,7 @@ export function startBackgroundRunner(service: RepoHealthService) {
       async () => {
         try {
           await service.analyzeRepo(owner, repo);
-          console.log(`✅ Auto-analysis completed: ${fullRepo}`);
+          console.log(`✅Auto-analysis completed: ${fullRepo}`);
         } catch (err) {
           console.warn(`⚠️ Auto-analysis failed: ${fullRepo}`, err);
         }
