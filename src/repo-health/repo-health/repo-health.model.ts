@@ -3,56 +3,56 @@ import { Document } from 'mongoose';
 @Schema({ _id: false })
 export class OverallHealth {
   @Prop({ type: Number, required: true })
-  score: number;
+  score!: number;
 
   @Prop({ type: String, required: true })
-  label: string;
+  label!: string;
 }
 export const OverallHealthSchema = SchemaFactory.createForClass(OverallHealth);
 
 @Schema({ timestamps: true })
 export class RepoHealth extends Document {
   @Prop({ required: true, unique: true })
-  repo_id: string;
+  repo_id!: string;
 
   @Prop({ required: true })
-  owner: string;
+  owner!: string;
 
   @Prop({ required: true })
-  repo: string;
+  repo!: string;
 
   @Prop()
-  name: string;
+  name!: string;
 
   @Prop()
-  stars: number;
+  stars!: number;
 
   @Prop()
-  forks: number;
+  forks!: number;
 
   @Prop()
-  open_issues: number;
+  open_issues!: number;
 
   @Prop()
-  last_pushed: Date;
+  last_pushed!: Date;
 
   @Prop({ type: OverallHealthSchema })
-  overall_health: OverallHealth;
+  overall_health!: OverallHealth;
 
   @Prop()
-  commit_activity: number[];
+  commit_activity!: number[];
 
   @Prop()
-  security_alerts: number;
+  security_alerts!: number;
 
   @Prop()
-  dependency_health: number;
+  dependency_health!: number;
 
   @Prop()
-  risky_dependencies: string[];
+  risky_dependencies!: string[];
 
   @Prop({ expires: 604800 })
-  createdAt: Date;
+  createdAt!: Date;
 }
 
 export const RepoHealthSchema = SchemaFactory.createForClass(RepoHealth);

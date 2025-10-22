@@ -1,4 +1,4 @@
-import { createMockModel } from '../../script/package-health';
+import { createMockModel } from './../../script/package-health';
 
 describe('createMockModel', () => {
   const mockModel = createMockModel();
