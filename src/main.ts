@@ -47,7 +47,7 @@ async function bootstrap() {
     throw new Error('PORT is not set in environment variables!');
   }
 
-  await app.listen(port, '0.0.0.0', () => {
+  await app.listen(port, () => {
     console.log(`🚀 Server running on http://0.0.0.0:${port}`);
     console.log(`📖 Swagger docs available at http://0.0.0.0:${port}/api`);
   });
