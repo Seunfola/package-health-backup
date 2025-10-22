@@ -3,7 +3,6 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "resolvePackageJsonExports": true,
-    "esModuleInterop": true,
     "strict": true,
     "isolatedModules": true,
     "declaration": true,
@@ -17,17 +16,20 @@
     "outDir": "./dist",
     "baseUrl": "./",
     "incremental": true,
-    "skipLibCheck": true,
     "strictNullChecks": true,
     "strictPropertyInitialization": true,
     "forceConsistentCasingInFileNames": true,
     "noImplicitAny": false,
     "strictBindCallApply": false,
+    "typeRoots": ["./node_modules/@types"],
+    "types": ["node", "express", "multer"],
+    "skipLibCheck": true,
+    "esModuleInterop": true,    
     "noFallthroughCasesInSwitch": false
   },
   "include": [
     "src/**/*",
     "scripts/**/*",
     "netlify/functions/server.cjs"
-  ]
+  ],
 }
