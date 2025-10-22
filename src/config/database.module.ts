@@ -13,13 +13,26 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
           throw new Error('MONGO_URI is not defined in environment variables');
         }
 
+        const isProduction =
+          configService.get<string>('NODE_ENV') === 'production';
+
         return {
           uri,
           retryWrites: true,
-          serverSelectionTimeoutMS: 5000,
-          ssl: true,
+          w: 'majority',
+          serverSelectionTimeoutMS: 10000,
+          connectTimeoutMS: 30000,
+          socketTimeoutMS: 45000,
+          family: 4,
           tls: true,
-          tlsAllowInvalidCertificates: process.env.NODE_ENV !== 'production',
+          tlsAllowInvalidCertificates: !isProduction,
+          tlsAllowInvalidHostnames: !isProduction,
+          bufferCommands: false,
+          retryAttempts: 10,
+          retryDelay: 5000,
+          autoIndex: !isProduction,
+          maxPoolSize: 10,
+          minPoolSize: 2,
         };
       },
       inject: [ConfigService],
