@@ -19,7 +19,6 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
           serverSelectionTimeoutMS: 5000,
           ssl: true,
           tls: true,
-          // use this only outside production
           tlsAllowInvalidCertificates: process.env.NODE_ENV !== 'production',
         };
       },
