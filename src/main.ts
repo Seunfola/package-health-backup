@@ -12,7 +12,6 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   const isProduction = process.env.NODE_ENV === 'production';
-
   const corsOrigin = isProduction
     ? process.env.CORS_ORIGIN_PROD
     : process.env.CORS_ORIGIN_DEV;
@@ -43,29 +42,17 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api', app, document);
 
-  // For serverless, don't call listen(), just init and return
-  await app.init();
-  return app;
+  const port = process.env.PORT;
+  if (!port) {
+    throw new Error('PORT is not set in environment variables!');
+  }
+
+  await app.listen(port);
+  console.log(`🚀 Server running on port ${port}`);
+  console.log(`📖 Swagger docs available at /api`);
 }
 
-// Export for serverless
-const appPromise = bootstrap();
-
-// For local development
-if (process.env.NODE_ENV !== 'production') {
-  (async () => {
-    const app = await appPromise;
-    const port = process.env.PORT ?? 8000;
-    void app.listen(port, () => {
-      console.log(`🚀 Server running on http://localhost:${port}`);
-      console.log(`📖 Swagger docs available at http://localhost:${port}/api`);
-    });
-  })().catch((error) => {
-    console.error('Failed to start server:', error);
-    process.exit(1);
-  });
-}
-
-export default appPromise.then(
-  (app) => app.getHttpAdapter().getInstance() as Express.Application,
-);
+bootstrap().catch((error) => {
+  console.error('❌ Failed to start server:', error);
+  process.exit(1);
+});

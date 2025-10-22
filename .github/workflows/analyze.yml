@@ -112,7 +112,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ github.run_number }}
-          release_name: "Health Report: ${{ inputs.owner }}/${{ inputs.repo }}"
+          name: "Health Report: ${{ inputs.owner }}/${{ inputs.repo }}"
           body: "Health report generated for ${{ inputs.owner }}/${{ inputs.repo }}"
           draft: false
           prerelease: false
