@@ -6,11 +6,23 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
   imports: [
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
-        uri: configService.get<string>('MONGO_URI'),
-        retryWrites: true,
-        serverSelectionTimeoutMS: 5000,
-      }),
+      useFactory: (configService: ConfigService) => {
+        const uri = configService.get<string>('MONGO_URI');
+
+        if (!uri) {
+          throw new Error('MONGO_URI is not defined in environment variables');
+        }
+
+        return {
+          uri,
+          retryWrites: true,
+          serverSelectionTimeoutMS: 5000,
+          ssl: true,
+          tls: true,
+          // use this only outside production
+          tlsAllowInvalidCertificates: process.env.NODE_ENV !== 'production',
+        };
+      },
       inject: [ConfigService],
     }),
   ],

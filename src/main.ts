@@ -48,8 +48,8 @@ async function bootstrap() {
   }
 
   await app.listen(port, () => {
-    console.log(`🚀 Server running on http://0.0.0.0:${port}`);
-    console.log(`📖 Swagger docs available at http://0.0.0.0:${port}/api`);
+    console.log(`🚀 Server running on http://localhost:${port}`);
+    console.log(`📖 Swagger docs available at http://${port}/api`);
   });
 }
 
