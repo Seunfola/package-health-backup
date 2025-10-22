@@ -8,25 +8,26 @@
   "bin": {
     "package-health": "dist/package-health-cli.js"
   },
-  "scripts": {
-    "build": "nest build",
-    "build:netlify": "nest build",
-    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "start": "node dist/main.js",
-    "start:dev": "node start --watch",
-    "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/main.js",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
-    "test": "jest",
-    "clean": "rimraf tmp/",
-    "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
-    "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
-    "cli": "ts-node scripts/cli.ts",
-    "cli:analyze": "ts-node scripts/cli.ts analyze",
-    "background": "ts-node scripts/background-runner.ts"
-  },
+"scripts": {
+  "prestart:prod": "nest build",
+  "build": "nest build",
+  "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+  "start": "node dist/main.js",
+  "start:dev": "nest start --watch",
+  "start:debug": "nest start --debug --watch",
+  "start:prod": "NODE_ENV=production node start",
+  "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+  "test": "jest",
+  "clean": "rimraf tmp/",
+  "test:watch": "jest --watch",
+  "test:cov": "jest --coverage",
+  "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
+  "test:e2e": "jest --config ./test/jest-e2e.json",
+  "cli": "ts-node scripts/cli.ts",
+  "cli:analyze": "ts-node scripts/cli.ts analyze",
+  "background": "ts-node scripts/background-runner.ts"
+}
+,
   "dependencies": {
     "@nestjs/axios": "^4.0.1",
     "@nestjs/cache-manager": "^3.0.1",
