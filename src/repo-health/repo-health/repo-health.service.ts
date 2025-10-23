@@ -494,55 +494,53 @@ export class RepoHealthService {
       );
     }
   }
-
   private async fetchRepo(
     owner: string,
     repo: string,
     token?: string,
-  ): Promise<GitHubRepoResponse | undefined> {
+  ): Promise<GitHubRepoResponse> {
     const cacheKey = `${owner}/${repo}`;
     const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
 
-    // If cached as public do unauthenticated request (no token header)
-    const cachedVisibility = this.visibilityCache.get(cacheKey);
-    if (cachedVisibility && cachedVisibility.isPublic === true) {
-      const headers = this.buildHeaders(); // no token
+    // Try public cache first
+    const cached = this.visibilityCache.get(cacheKey);
+    if (cached?.isPublic && cached.expiresAt > Date.now()) {
       const res = await lastValueFrom(
-        this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
-      );
-      return res.data;
-    }
-
-    try {
-      // Try unauthenticated first
-      const publicRes = await lastValueFrom(
         this.httpService.get<GitHubRepoResponse>(baseUrl, {
           headers: this.buildHeaders(),
         }),
       );
+      return res.data;
+    }
 
-      if (publicRes.status === 200) {
+    // Try unauthenticated request
+    try {
+      const res = await lastValueFrom(
+        this.httpService.get<GitHubRepoResponse>(baseUrl, {
+          headers: this.buildHeaders(),
+        }),
+      );
+      if (res.status === 200) {
+        // mark as public
         this.visibilityCache.set(cacheKey, {
           isPublic: true,
-          expiresAt: Date.now() + this.VISIBILITY_TTL,
+          expiresAt: Date.now() + 1000 * 60 * 60,
         });
       }
+      return res.data;
     } catch (err: any) {
-      const status = err?.response?.status;
-      const message = err?.response?.data?.message?.toLowerCase?.() || '';
+      const status = err?.response?.status ?? 0;
 
-      // If unauthorized/forbidden, the repo could be private; require token or retry with token
+      // Only try token if 401/403 (likely private)
       if ([401, 403].includes(status)) {
         if (!token) {
           throw new HttpException(
-            {
-              message: `Repository '${owner}/${repo}' is private or requires a valid token.`,
-              reason: 'PRIVATE_REPO',
-              context: 'fetchRepo',
-            },
+            'This repository is private. Provide a valid GitHub token.',
             HttpStatus.UNAUTHORIZED,
           );
         }
+
+        // retry with token
         try {
           const authRes = await lastValueFrom(
             this.httpService.get<GitHubRepoResponse>(baseUrl, {
@@ -552,20 +550,19 @@ export class RepoHealthService {
           if (authRes.status === 200) {
             this.visibilityCache.set(cacheKey, {
               isPublic: false,
-              expiresAt: Date.now() + this.VISIBILITY_TTL,
+              expiresAt: Date.now() + 1000 * 60 * 60,
             });
-            return authRes.data;
           }
+          return authRes.data;
         } catch (authErr: any) {
-          const authStatus = authErr?.response?.status;
-          if (authStatus === 401) {
-            // invalid token
+          const authStatus = authErr?.response?.status ?? 0;
+          const msg = authErr?.response?.data?.message ?? '';
+          if (
+            authStatus === 401 ||
+            msg.toLowerCase().includes('bad credentials')
+          ) {
             throw new HttpException(
-              {
-                message: `Invalid or expired GitHub token provided.`,
-                reason: 'INVALID_TOKEN',
-                context: 'fetchRepo',
-              },
+              'Invalid or expired GitHub token provided.',
               HttpStatus.BAD_REQUEST,
             );
           }
@@ -575,31 +572,9 @@ export class RepoHealthService {
 
       if (status === 404) {
         throw new HttpException(
-          {
-            message: `Repository '${owner}/${repo}' not found.`,
-            reason: 'NOT_FOUND',
-            context: 'fetchRepo',
-          },
+          `Repository '${owner}/${repo}' not found.`,
           HttpStatus.NOT_FOUND,
         );
-      }
-
-      if (message.includes('rate limit') && token) {
-        try {
-          const authRes = await lastValueFrom(
-            this.httpService.get<GitHubRepoResponse>(baseUrl, {
-              headers: this.buildHeaders(token),
-            }),
-          );
-          return authRes.data;
-        } catch (limitErr) {
-          GitHubErrorHandler.handle(
-            owner,
-            repo,
-            limitErr,
-            'fetchRepo (rate-limit)',
-          );
-        }
       }
 
       GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo (final)');
