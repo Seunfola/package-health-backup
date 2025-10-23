@@ -502,36 +502,45 @@ export class RepoHealthService {
     const cacheKey = `${owner}/${repo}`;
     const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
 
-    // Try public cache first
+    // Public cache
     const cached = this.visibilityCache.get(cacheKey);
     if (cached?.isPublic && cached.expiresAt > Date.now()) {
-      const res = await lastValueFrom(
-        this.httpService.get<GitHubRepoResponse>(baseUrl, {
-          headers: this.buildHeaders(),
-        }),
-      );
-      return res.data;
+      try {
+        const res = await lastValueFrom(
+          this.httpService.get<GitHubRepoResponse>(baseUrl, {
+            headers: this.buildHeaders(),
+          }),
+        );
+        return res.data;
+      } catch (err) {
+        // do NOT retry with token for cached public repos
+        throw new HttpException(
+          `Failed to fetch public repository '${owner}/${repo}'.`,
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
     }
 
-    // Try unauthenticated request
+    // Unauthenticated request first
     try {
       const res = await lastValueFrom(
         this.httpService.get<GitHubRepoResponse>(baseUrl, {
           headers: this.buildHeaders(),
         }),
       );
+
       if (res.status === 200) {
-        // mark as public
         this.visibilityCache.set(cacheKey, {
           isPublic: true,
           expiresAt: Date.now() + 1000 * 60 * 60,
         });
       }
+
       return res.data;
     } catch (err: any) {
       const status = err?.response?.status ?? 0;
 
-      // Only try token if 401/403 (likely private)
+      // Retry with token only if private
       if ([401, 403].includes(status)) {
         if (!token) {
           throw new HttpException(
@@ -540,7 +549,6 @@ export class RepoHealthService {
           );
         }
 
-        // retry with token
         try {
           const authRes = await lastValueFrom(
             this.httpService.get<GitHubRepoResponse>(baseUrl, {
@@ -556,17 +564,18 @@ export class RepoHealthService {
           return authRes.data;
         } catch (authErr: any) {
           const authStatus = authErr?.response?.status ?? 0;
-          const msg = authErr?.response?.data?.message ?? '';
-          if (
-            authStatus === 401 ||
-            msg.toLowerCase().includes('bad credentials')
-          ) {
+          const msg = authErr?.response?.data?.message?.toLowerCase() ?? '';
+          if (authStatus === 401 || msg.includes('bad credentials')) {
             throw new HttpException(
               'Invalid or expired GitHub token provided.',
               HttpStatus.BAD_REQUEST,
             );
           }
           GitHubErrorHandler.handle(owner, repo, authErr, 'fetchRepo (authed)');
+          throw new HttpException(
+            `Failed to fetch private repository '${owner}/${repo}'.`,
+            HttpStatus.INTERNAL_SERVER_ERROR,
+          );
         }
       }
 
@@ -578,6 +587,10 @@ export class RepoHealthService {
       }
 
       GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo (final)');
+      throw new HttpException(
+        `Failed to fetch repository '${owner}/${repo}'.`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
