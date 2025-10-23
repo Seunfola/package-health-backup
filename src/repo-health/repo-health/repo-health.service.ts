@@ -539,12 +539,17 @@ export class RepoHealthService {
         );
       }
 
-      if (status === 403 && msg.toLowerCase().includes('rate limit')) {
-        throw new HttpException(
-          'GitHub API rate limit exceeded. Try again later.',
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
+      if (status === 403 || status === 429) {
+        const rateLimitRemaining =
+          err.response?.headers?.['x-ratelimit-remaining'];
+        if (rateLimitRemaining === '0' || status === 429) {
+          throw new HttpException(
+            'GitHub API rate limit exceeded. Try again later.',
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+        }
       }
+
 
       if (status === 401 && token) {
         try {
