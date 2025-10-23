@@ -1,4 +1,3 @@
-// src/utils/github-error.util.ts
 import { HttpException, HttpStatus } from '@nestjs/common';
 
 export class GitHubErrorHandler {
