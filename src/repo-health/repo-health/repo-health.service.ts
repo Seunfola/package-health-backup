@@ -8,6 +8,7 @@ import { RepoHealth, RepoHealthDocument } from './repo-health.model';
 import AdmZip from 'adm-zip';
 import path from 'path';
 import fs from 'fs';
+import { GitHubErrorHandler } from 'src/utils/github-error.util';
 
 interface GitHubRepoResponse {
   name: string;
@@ -67,16 +68,13 @@ export class RepoHealthService {
 
   private readonly cache = new Map<string, CacheEntry<unknown>>();
 
-  private readonly dockerAvailable: boolean;
-
+  private _dockerAvailable: boolean | null = null;
   constructor(
     @InjectModel(RepoHealth.name)
     private readonly repoHealthModel: Model<RepoHealthDocument>,
     private readonly httpService: HttpService,
     private readonly dependencyAnalyzer: DependencyAnalyzerService,
-  ) {
-    this.dockerAvailable = this.detectDocker();
-  }
+  ) {}
 
   private buildHeaders(token?: string): Record<string, string> {
     const headers: Record<string, string> = {
@@ -94,11 +92,23 @@ export class RepoHealthService {
   }
 
   private detectDocker(): boolean {
+    if (this._dockerAvailable !== null) return this._dockerAvailable;
+
     try {
-      return fs.existsSync('/var/run/docker.sock');
+      const detected =
+        fs.existsSync('/.dockerenv') || fs.existsSync('/var/run/docker.sock');
+
+      this._dockerAvailable = detected;
+      return detected;
     } catch {
+      this._dockerAvailable = false;
       return false;
     }
+  }
+
+  // Expose as readonly getter
+  get dockerAvailable(): boolean {
+    return this.detectDocker();
   }
 
   async findOne(
@@ -482,20 +492,8 @@ export class RepoHealthService {
         this.httpService.get<GitHubRepoResponse>(url, { headers }),
       );
       return res.data;
-    } catch (err: any) {
-      // If GitHub indicates forbidden/not found, it is often an auth issue (private repo).
-      const status = err?.response?.status ?? err?.status;
-      if (status === 401 || status === 403 || status === 404) {
-        // 404 may mean "private" or "not found" — we surface auth request so frontend can prompt login.
-        throw new HttpException(
-          'Repository may be private or inaccessible. Authentication is required to access this repository.',
-          HttpStatus.UNAUTHORIZED,
-        );
-      }
-      throw new HttpException(
-        'Failed to fetch repository data from GitHub',
-        HttpStatus.BAD_GATEWAY,
-      );
+    } catch (err) {
+      GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo');
     }
   }
 
@@ -510,37 +508,16 @@ export class RepoHealthService {
       const res = await lastValueFrom(
         this.httpService.get<unknown>(url, { headers }),
       );
-      // GitHub returns 202 when the stats are being generated
+
       if (res.status === 202) return [];
       const data = res.data;
       if (!Array.isArray(data)) return [];
-      return data.map((item: any) => {
-        if (
-          typeof item === 'object' &&
-          item !== null &&
-          'week' in item &&
-          'total' in item &&
-          typeof (item as { week: unknown }).week === 'number' &&
-          typeof (item as { total: unknown }).total === 'number'
-        ) {
-          return {
-            week: (item as { week: number }).week,
-            total: (item as { total: number }).total,
-          };
-        }
-        return { week: 0, total: 0 };
-      });
-    } catch (err: any) {
-      const status = err?.response?.status ?? err?.status;
-      if (status === 401 || status === 403 || status === 404) {
-        // Let caller know auth is required
-        throw new HttpException(
-          'Commit activity is inaccessible without authentication.',
-          HttpStatus.UNAUTHORIZED,
-        );
-      }
-      // For other errors, return empty commit history as before (safe fallback)
-      return [];
+      return data.map((item: any) => ({
+        week: typeof item.week === 'number' ? item.week : 0,
+        total: typeof item.total === 'number' ? item.total : 0,
+      }));
+    } catch (err) {
+      GitHubErrorHandler.handle(owner, repo, err, 'fetchCommitActivity');
     }
   }
 
@@ -556,15 +533,8 @@ export class RepoHealthService {
       if (res.status === 204) return [true];
       if (res.status === 404) return [];
       return [];
-    } catch (err: any) {
-      const status = err?.response?.status ?? err?.status;
-      if (status === 401 || status === 403 || status === 404) {
-        throw new HttpException(
-          'Security alert information is inaccessible without authentication.',
-          HttpStatus.UNAUTHORIZED,
-        );
-      }
-      return [];
+    } catch (err) {
+      GitHubErrorHandler.handle(owner, repo, err, 'fetchSecurityAlerts');
     }
   }
 
@@ -582,11 +552,8 @@ export class RepoHealthService {
         throw new Error('Invalid JSON structure');
       }
       return parsed as Record<string, unknown>;
-    } catch {
-      throw new HttpException(
-        'Invalid JSON format. Must be a non-null object.',
-        HttpStatus.BAD_REQUEST,
-      );
+    } catch (err) {
+      GitHubErrorHandler.handle('N/A', 'N/A', err, '_parseJson');
     }
   }
 
@@ -659,7 +626,6 @@ export class RepoHealthService {
     file: Express.Multer.File,
   ): Record<string, string> {
     const deps: Record<string, string> = {};
-
     const isZip =
       file.mimetype === 'application/zip' || file.originalname.endsWith('.zip');
 
@@ -694,10 +660,12 @@ export class RepoHealthService {
         }
 
         return deps;
-      } catch {
-        throw new HttpException(
-          'Failed to read or parse the uploaded zip folder.',
-          HttpStatus.BAD_REQUEST,
+      } catch (err) {
+        GitHubErrorHandler.handle(
+          'N/A',
+          'N/A',
+          err,
+          '_getDependenciesFromFile',
         );
       }
     }
