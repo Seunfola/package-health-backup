@@ -504,13 +504,14 @@ export class RepoHealthService {
     const cached = this.visibilityCache.get(cacheKey);
 
     if (cached?.isPublic && cached.expiresAt > Date.now()) {
-      const res = await lastValueFrom(
-        this.httpService.get<GitHubRepoResponse>(
-          `https://api.github.com/repos/${owner}/${repo}`,
-          { headers: this.buildHeaders() },
-        ),
-      );
-      return res.data;
+      return (
+        await lastValueFrom(
+          this.httpService.get<GitHubRepoResponse>(
+            `https://api.github.com/repos/${owner}/${repo}`,
+            { headers: this.buildHeaders() },
+          ),
+        )
+      ).data;
     }
 
     try {
@@ -521,15 +522,140 @@ export class RepoHealthService {
         ),
       );
 
-      // If successful, mark as public
-      if (res.status === 200) {
-        this.visibilityCache.set(cacheKey, {
-          isPublic: true,
-          expiresAt: Date.now() + 1000 * 60 * 60, // 1 hour
-        });
-      }
+      this.visibilityCache.set(cacheKey, {
+        isPublic: true,
+        expiresAt: Date.now() + 1000 * 60 * 60,
+      });
 
       return res.data;
+    } catch (err: any) {
+      const status = err?.response?.status ?? 0;
+      const msg = err?.response?.data?.message ?? '';
+
+      if (status === 404) {
+        throw new HttpException(
+          `Repository '${owner}/${repo}' not found.`,
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      if (status === 403 && msg.toLowerCase().includes('rate limit')) {
+        throw new HttpException(
+          'GitHub API rate limit exceeded. Try again later.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+
+      if (status === 401 && token) {
+        try {
+          const authRes = await lastValueFrom(
+            this.httpService.get<GitHubRepoResponse>(
+              `https://api.github.com/repos/${owner}/${repo}`,
+              { headers: this.buildHeaders(token) },
+            ),
+          );
+
+          this.visibilityCache.set(cacheKey, {
+            isPublic: false,
+            expiresAt: Date.now() + 1000 * 60 * 60,
+          });
+
+          return authRes.data;
+        } catch (authErr: any) {
+          const authStatus = authErr?.response?.status ?? 0;
+          const authMsg = authErr?.response?.data?.message ?? '';
+
+          if (
+            authStatus === 401 ||
+            authMsg.toLowerCase().includes('bad credentials')
+          ) {
+            throw new HttpException(
+              'Invalid or expired GitHub token provided.',
+              HttpStatus.BAD_REQUEST,
+            );
+          }
+
+          GitHubErrorHandler.handle(owner, repo, authErr, 'fetchRepo (authed)');
+        }
+      }
+
+      // fallback for any other errors
+      GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo (final)');
+    }
+  }
+
+  private async fetchCommitActivity(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<CommitActivityItem[]> {
+    const url = `https://api.github.com/repos/${owner}/${repo}/stats/commit_activity`;
+
+    try {
+      const res = await lastValueFrom(
+        this.httpService.get(url, { headers: this.buildHeaders() }),
+      );
+      if (res.status === 202) return []; // GitHub is processing stats
+      const data = res.data;
+      if (!Array.isArray(data)) return [];
+      return data.map((item) => ({
+        week: typeof item.week === 'number' ? item.week : 0,
+        total: typeof item.total === 'number' ? item.total : 0,
+      }));
+    } catch (err: any) {
+      const status = err?.response?.status ?? 0;
+
+      if ([401, 403].includes(status)) {
+        if (!token) {
+          throw new HttpException(
+            'Repository is private. Please provide a GitHub token.',
+            HttpStatus.UNAUTHORIZED,
+          );
+        }
+
+        // retry authenticated
+        for (let i = 0; i < 5; i++) {
+          try {
+            const authRes = await lastValueFrom(
+              this.httpService.get(url, { headers: this.buildHeaders(token) }),
+            );
+            if (authRes.status === 202) {
+              await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+              continue;
+            }
+            const data = authRes.data;
+            if (!Array.isArray(data)) return [];
+            return data.map((item) => ({
+              week: typeof item.week === 'number' ? item.week : 0,
+              total: typeof item.total === 'number' ? item.total : 0,
+            }));
+          } catch {
+            // ignore and retry
+          }
+        }
+
+        return [];
+      }
+
+      GitHubErrorHandler.handle(owner, repo, err, 'fetchCommitActivity');
+      return [];
+    }
+  }
+
+  private async fetchSecurityAlerts(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<any[]> {
+    const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
+
+    try {
+      const res = await lastValueFrom(
+        this.httpService.get(url, { headers: this.buildHeaders() }),
+      );
+      if (res.status === 204) return [true]; // alerts enabled
+      if (res.status === 404) return []; // alerts not enabled
+      return [];
     } catch (err: any) {
       const status = err?.response?.status ?? 0;
 
@@ -543,25 +669,14 @@ export class RepoHealthService {
 
         try {
           const authRes = await lastValueFrom(
-            this.httpService.get<GitHubRepoResponse>(
-              `https://api.github.com/repos/${owner}/${repo}`,
-              { headers: this.buildHeaders(token) },
-            ),
+            this.httpService.get(url, { headers: this.buildHeaders(token) }),
           );
-
-          // If successful, mark as private in cache
-          if (authRes.status === 200) {
-            this.visibilityCache.set(cacheKey, {
-              isPublic: false,
-              expiresAt: Date.now() + 1000 * 60 * 60, // 1 hour
-            });
-          }
-
-          return authRes.data;
+          if (authRes.status === 204) return [true];
+          if (authRes.status === 404) return [];
+          return [];
         } catch (authErr: any) {
           const authStatus = authErr?.response?.status ?? 0;
           const msg = authErr?.response?.data?.message ?? '';
-
           if (
             authStatus === 401 ||
             msg.toLowerCase().includes('bad credentials')
@@ -571,66 +686,17 @@ export class RepoHealthService {
               HttpStatus.BAD_REQUEST,
             );
           }
-
-          GitHubErrorHandler.handle(owner, repo, authErr, 'fetchRepo (authed)');
+          GitHubErrorHandler.handle(
+            owner,
+            repo,
+            authErr,
+            'fetchSecurityAlerts (authed)',
+          );
+          return [];
         }
       }
 
-      if (status === 404) {
-        throw new HttpException(
-          `Repository '${owner}/${repo}' not found.`,
-          HttpStatus.NOT_FOUND,
-        );
-      }
-
-      GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo (final)');
-    }
-  }
-
-  private async fetchCommitActivity(
-    owner: string,
-    repo: string,
-    token?: string,
-  ): Promise<CommitActivityItem[]> {
-    try {
-      const isPublic = this.visibilityCache.get(`${owner}/${repo}`)?.isPublic;
-      const headers = this.buildHeaders(isPublic ? undefined : token);
-      const url = `https://api.github.com/repos/${owner}/${repo}/stats/commit_activity`;
-      const res = await lastValueFrom(
-        this.httpService.get<unknown>(url, { headers }),
-      );
-
-      if (res.status === 202) return [];
-      const data = res.data;
-      if (!Array.isArray(data)) return [];
-      return data.map((item: any) => ({
-        week: typeof item.week === 'number' ? item.week : 0,
-        total: typeof item.total === 'number' ? item.total : 0,
-      }));
-    } catch (err) {
-      GitHubErrorHandler.handle(owner, repo, err, 'fetchCommitActivity');
-    }
-  }
-
-  private async fetchSecurityAlerts(
-    owner: string,
-    repo: string,
-    token?: string,
-  ): Promise<any[]> {
-    const isPublic = this.visibilityCache.get(`${owner}/${repo}`)?.isPublic;
-    const headers = this.buildHeaders(isPublic ? undefined : token);
-    const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
-
-    try {
-      const res = await lastValueFrom(this.httpService.get(url, { headers }));
-      if (res.status === 204) return [true];
-      if (res.status === 404) return [];
-      return [];
-    } catch (err: any) {
-      const status = err?.response?.status ?? 0;
-
       if (status === 404) return [];
-
       GitHubErrorHandler.handle(owner, repo, err, 'fetchSecurityAlerts');
       return [];
     }
