@@ -26,25 +26,34 @@ interface OwnerRepoBody {
 export class RepoHealthController {
   constructor(private readonly repoHealthService: RepoHealthService) {}
 
-  /** Analyze GitHub repo by URL */
+  /** 🔍 Analyze GitHub repo by URL */
   @Post('analyze-url')
-  @ApiOperation({ summary: 'Analyze a repository by GitHub URL' })
+  @ApiOperation({
+    summary: 'Analyze a repository by GitHub URL (token optional)',
+  })
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
         url: { type: 'string', example: 'https://github.com/nestjs/nest' },
-        token: { type: 'string', example: 'ghp_xxx' },
+        token: {
+          type: 'string',
+          example: 'ghp_xxx',
+          description: 'Optional GitHub token for private repositories',
+        },
       },
       required: ['url'],
     },
   })
   async analyzeByUrl(@Body() body: UrlBody) {
     const { url, token } = body;
+
     if (!url) {
       throw new HttpException('GitHub URL is required', HttpStatus.BAD_REQUEST);
     }
+
     try {
+      // Service will determine if token is needed automatically
       return await this.repoHealthService.analyzeByUrl(
         url,
         undefined,
@@ -58,10 +67,12 @@ export class RepoHealthController {
     }
   }
 
+  /** 📦 Analyze uploaded package.json or zip file */
   @Post('analyze-package/upload')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({
-    summary: 'Analyze uploaded package.json, package-lock.json, or folder zip',
+    summary:
+      'Analyze uploaded package.json, package-lock.json, or zipped project folder',
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -77,9 +88,7 @@ export class RepoHealthController {
     }
 
     try {
-      // Extract dependencies from uploaded file (supports zip + single file)
       const deps = this.repoHealthService['_getDependenciesFromFile'](file);
-
       const analysis = await this.repoHealthService.analyzeJson(
         JSON.stringify({ dependencies: deps }),
       );
@@ -97,7 +106,7 @@ export class RepoHealthController {
     }
   }
 
-  /** Analyze pasted package.json content only */
+  /** ✍️ Analyze pasted package.json content */
   @Post('analyze-package/paste')
   @ApiOperation({ summary: 'Analyze pasted package.json content' })
   @ApiBody({
@@ -122,24 +131,29 @@ export class RepoHealthController {
     }
   }
 
-  /** Fetch stored repo health from DB */
+  /** 🧾 Fetch stored repository health info */
   @Post('fetch')
   @ApiOperation({ summary: 'Fetch stored repository health info' })
   @ApiBody({
     schema: {
       type: 'object',
-      properties: { owner: { type: 'string' }, repo: { type: 'string' } },
+      properties: {
+        owner: { type: 'string', example: 'nestjs' },
+        repo: { type: 'string', example: 'nest' },
+      },
       required: ['owner', 'repo'],
     },
   })
   async fetchStoredRepo(@Body() body: OwnerRepoBody) {
     const { owner, repo } = body;
+
     if (!owner || !repo) {
       throw new HttpException(
         'Both owner and repo are required',
         HttpStatus.BAD_REQUEST,
       );
     }
+
     try {
       return await this.repoHealthService.findRepoHealth(owner, repo);
     } catch (err: unknown) {

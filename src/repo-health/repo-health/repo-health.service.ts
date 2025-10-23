@@ -23,6 +23,16 @@ interface CommitActivityItem {
   total: number;
 }
 
+type DependencyAnalysisResult = {
+  dependencyHealth: number;
+  riskyDependencies: string[];
+  bundleSize: number;
+  licenseRisks: string[];
+  popularity: number;
+  daysBehind: number;
+};
+
+
 type CacheEntry<T> = { createdAt: number; ttlMs: number; value: T };
 
 class Semaphore {
@@ -66,6 +76,21 @@ export class RepoHealthService {
     private readonly dependencyAnalyzer: DependencyAnalyzerService,
   ) {
     this.dockerAvailable = this.detectDocker();
+  }
+
+  private buildHeaders(token?: string): Record<string, string> {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'package-health-service',
+    };
+
+    const effectiveToken = token?.trim() || process.env.GITHUB_TOKEN;
+
+    if (effectiveToken) {
+      headers['Authorization'] = `Bearer ${effectiveToken}`;
+    }
+
+    return headers;
   }
 
   private detectDocker(): boolean {
@@ -202,11 +227,15 @@ export class RepoHealthService {
       1000 * 60 * 3,
     );
 
-    // ✅ REAL ANALYSIS!
-    const deps = this._getDependencies(file, rawJson);
-    const analysis = await this.dependencyAnalyzer.analyzeDependencies(deps);
-    const dependencyHealth = analysis.score;
-    const riskyDependencies = analysis.risky;
+    // ✅ Use refactored dependency analysis result
+    const {
+      dependencyHealth,
+      riskyDependencies,
+      bundleSize,
+      licenseRisks,
+      popularity,
+      daysBehind,
+    } = await this._processDependencies(file, rawJson);
 
     const overallHealth = this._calculateHealthScore(
       repoData,
@@ -239,10 +268,10 @@ export class RepoHealthService {
         dependency_health: dependencyHealth,
         risky_dependencies: riskyDependencies,
         overall_health: overallHealth,
-        bundle_size: analysis.bundleSize,
-        license_risks: analysis.licenseRisks,
-        popularity: analysis.popularity,
-        days_behind: analysis.daysBehind || 0,
+        bundle_size: bundleSize,
+        license_risks: licenseRisks,
+        popularity,
+        days_behind: daysBehind,
       },
       { new: true, upsert: true, setDefaultsOnInsert: true },
     );
@@ -253,12 +282,21 @@ export class RepoHealthService {
   async processDependencies(
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
-  ): Promise<{ dependencyHealth: number; riskyDependencies: string[] }> {
-    return this._processDependencies(file, rawJson);
+  ): Promise<DependencyAnalysisResult> {
+    const result = await this._processDependencies(file, rawJson);
+    // Ensure result contains all required fields for DependencyAnalysisResult
+    return {
+      dependencyHealth: result.dependencyHealth,
+      riskyDependencies: result.riskyDependencies,
+      bundleSize: result.bundleSize,
+      licenseRisks: result.licenseRisks,
+      popularity: result.popularity,
+      daysBehind: result.daysBehind,
+    };
   }
 
   async getCommitActivity(owner: string, repo: string, token?: string) {
-    return this.fetchCommitActivity(owner, repo, token);
+    return await this.fetchCommitActivity(owner, repo, token);
   }
 
   async getSecurityAlerts(owner: string, repo: string, token?: string) {
@@ -330,7 +368,7 @@ export class RepoHealthService {
   private async _processDependencies(
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
-  ): Promise<{ dependencyHealth: number; riskyDependencies: string[] }> {
+  ): Promise<DependencyAnalysisResult> {
     let deps: Record<string, string> = {};
 
     if (rawJson) {
@@ -340,16 +378,26 @@ export class RepoHealthService {
     }
 
     if (!deps || Object.keys(deps).length === 0) {
-      return { dependencyHealth: 100, riskyDependencies: [] };
+      return {
+        dependencyHealth: 100,
+        riskyDependencies: [],
+        bundleSize: 0,
+        licenseRisks: [],
+        popularity: 0,
+        daysBehind: 0,
+      };
     }
 
     const release = await this.analysisSemaphore.acquire();
     try {
       const analysis = await this.dependencyAnalyzer.analyzeDependencies(deps);
       return {
-        dependencyHealth:
-          typeof analysis?.score === 'number' ? analysis.score : 100,
-        riskyDependencies: Array.isArray(analysis?.risky) ? analysis.risky : [],
+        dependencyHealth: analysis?.score ?? 100,
+        riskyDependencies: analysis?.risky ?? [],
+        bundleSize: analysis?.bundleSize ?? 0,
+        licenseRisks: analysis?.licenseRisks ?? [],
+        popularity: analysis?.popularity ?? 0,
+        daysBehind: analysis?.daysBehind ?? 0,
       };
     } finally {
       release();
@@ -428,20 +476,22 @@ export class RepoHealthService {
     token?: string,
   ): Promise<GitHubRepoResponse> {
     try {
-      const headers: Record<string, string> = {
-        Accept: 'application/vnd.github.v3+json',
-        'User-Agent': 'package-health-service',
-      };
-      const authToken = token?.trim() || process.env.GITHUB_TOKEN;
-      if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`;
-      }
+      const headers = this.buildHeaders(token);
       const url = `https://api.github.com/repos/${owner}/${repo}`;
       const res = await lastValueFrom(
         this.httpService.get<GitHubRepoResponse>(url, { headers }),
       );
       return res.data;
-    } catch {
+    } catch (err: any) {
+      // If GitHub indicates forbidden/not found, it is often an auth issue (private repo).
+      const status = err?.response?.status ?? err?.status;
+      if (status === 401 || status === 403 || status === 404) {
+        // 404 may mean "private" or "not found" — we surface auth request so frontend can prompt login.
+        throw new HttpException(
+          'Repository may be private or inaccessible. Authentication is required to access this repository.',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
       throw new HttpException(
         'Failed to fetch repository data from GitHub',
         HttpStatus.BAD_GATEWAY,
@@ -455,14 +505,12 @@ export class RepoHealthService {
     token?: string,
   ): Promise<CommitActivityItem[]> {
     try {
-      const headers: Record<string, string> = {
-        Accept: 'application/vnd.github+json',
-      };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const headers = this.buildHeaders(token);
       const url = `https://api.github.com/repos/${owner}/${repo}/stats/commit_activity`;
       const res = await lastValueFrom(
         this.httpService.get<unknown>(url, { headers }),
       );
+      // GitHub returns 202 when the stats are being generated
       if (res.status === 202) return [];
       const data = res.data;
       if (!Array.isArray(data)) return [];
@@ -482,7 +530,16 @@ export class RepoHealthService {
         }
         return { week: 0, total: 0 };
       });
-    } catch {
+    } catch (err: any) {
+      const status = err?.response?.status ?? err?.status;
+      if (status === 401 || status === 403 || status === 404) {
+        // Let caller know auth is required
+        throw new HttpException(
+          'Commit activity is inaccessible without authentication.',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+      // For other errors, return empty commit history as before (safe fallback)
       return [];
     }
   }
@@ -493,16 +550,20 @@ export class RepoHealthService {
     token?: string,
   ): Promise<any[]> {
     try {
-      const headers: Record<string, string> = {
-        Accept: 'application/vnd.github.v3+json',
-      };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
+      const headers = this.buildHeaders(token);
       const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
       const res = await lastValueFrom(this.httpService.get(url, { headers }));
       if (res.status === 204) return [true];
       if (res.status === 404) return [];
       return [];
-    } catch {
+    } catch (err: any) {
+      const status = err?.response?.status ?? err?.status;
+      if (status === 401 || status === 403 || status === 404) {
+        throw new HttpException(
+          'Security alert information is inaccessible without authentication.',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
       return [];
     }
   }
