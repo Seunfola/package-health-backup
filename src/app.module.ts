@@ -5,7 +5,6 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { RepoHealthModule } from './repo-health/repo-health.module';
 import { UserProfileModule } from './user-profile/user-profile.module';
-import { RepositoryDetailsModule } from './repository-details/repository-details.module';
 import { AuthModule } from './auth/auth.module';
 import { DatabaseModule } from './config/database.module';
 import { NotificationModule } from './notification/notification.module';
@@ -29,7 +28,6 @@ import { UserPreferencesModule } from './preference/preferences.module';
     RepoHealthModule,
     AuthModule,
     UserProfileModule,
-    RepositoryDetailsModule,
     NotificationModule,
     UserPreferencesModule,
   ],
