@@ -60,12 +60,14 @@ export class RepoHealthController {
         token,
       );
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Unexpected error occurred';
-      throw new HttpException(message, HttpStatus.BAD_REQUEST);
+      if (err instanceof HttpException) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : 'Unexpected error occurred';
+      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
-
+  
   @Post('analyze-package/upload')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({
