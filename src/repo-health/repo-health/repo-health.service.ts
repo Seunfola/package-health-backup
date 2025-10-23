@@ -65,6 +65,7 @@ class Semaphore {
 @Injectable()
 export class RepoHealthService {
   private readonly analysisSemaphore = new Semaphore(4);
+  private readonly visibilityCache = new Map<string, boolean>();
 
   private readonly cache = new Map<string, CacheEntry<unknown>>();
 
@@ -82,10 +83,13 @@ export class RepoHealthService {
       'User-Agent': 'package-health-service',
     };
 
-    const effectiveToken = token?.trim() || process.env.GITHUB_TOKEN;
+    // Only use a token if explicitly provided or known to be valid
+    const effectiveToken = token?.trim();
 
     if (effectiveToken) {
-      headers['Authorization'] = `Bearer ${effectiveToken}`;
+      headers['Authorization'] = effectiveToken.startsWith('ghp_')
+        ? `token ${effectiveToken}` // old-style PAT
+        : `Bearer ${effectiveToken}`; // new fine-grained token
     }
 
     return headers;
@@ -237,7 +241,7 @@ export class RepoHealthService {
       1000 * 60 * 3,
     );
 
-    // ✅ Use refactored dependency analysis result
+    // Use refactored dependency analysis result
     const {
       dependencyHealth,
       riskyDependencies,
@@ -414,7 +418,6 @@ export class RepoHealthService {
     }
   }
 
-  /** Safe fetching helpers with small in-memory cache + retry/backoff */
   private async requestWithCache<T>(
     key: string,
     fn: () => Promise<T>,
@@ -485,15 +488,87 @@ export class RepoHealthService {
     repo: string,
     token?: string,
   ): Promise<GitHubRepoResponse> {
-    try {
-      const headers = this.buildHeaders(token);
-      const url = `https://api.github.com/repos/${owner}/${repo}`;
+    const cacheKey = `${owner}/${repo}`;
+    const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
+
+    // 🪶 If we already know it's public, skip the token entirely
+    if (this.visibilityCache.get(cacheKey) === true) {
+      const headers = this.buildHeaders(undefined);
       const res = await lastValueFrom(
-        this.httpService.get<GitHubRepoResponse>(url, { headers }),
+        this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
       );
       return res.data;
-    } catch (err) {
-      GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo');
+    }
+
+    try {
+      // Try public (unauthenticated) first
+      const publicHeaders = this.buildHeaders(undefined);
+      const res = await lastValueFrom(
+        this.httpService.get<GitHubRepoResponse>(baseUrl, {
+          headers: publicHeaders,
+        }),
+      );
+
+      // If it works unauthenticated, mark as public
+      if (res.status === 200) {
+        this.visibilityCache.set(cacheKey, true); // cache public visibility
+      }
+
+      return res.data;
+    } catch (err: any) {
+      const status = err?.response?.status;
+      const message = err?.response?.data?.message?.toLowerCase?.() || '';
+
+      // If unauthorized/private, retry with token
+      if ([401, 403, 404].includes(status)) {
+        if (token) {
+          try {
+            const authHeaders = this.buildHeaders(token);
+            const res = await lastValueFrom(
+              this.httpService.get<GitHubRepoResponse>(baseUrl, {
+                headers: authHeaders,
+              }),
+            );
+
+            // If success, mark as private (avoid future unauth attempts)
+            if (res.status === 200) {
+              this.visibilityCache.set(cacheKey, false);
+            }
+
+            return res.data;
+          } catch (authErr) {
+            GitHubErrorHandler.handle(
+              owner,
+              repo,
+              authErr,
+              'fetchRepo (authed)',
+            );
+          }
+        }
+      }
+
+      // unauthenticated rate limit
+      if (message.includes('rate limit') && token) {
+        try {
+          const authHeaders = this.buildHeaders(token);
+          const res = await lastValueFrom(
+            this.httpService.get<GitHubRepoResponse>(baseUrl, {
+              headers: authHeaders,
+            }),
+          );
+          return res.data;
+        } catch (limitErr) {
+          GitHubErrorHandler.handle(
+            owner,
+            repo,
+            limitErr,
+            'fetchRepo (rate-limit)',
+          );
+        }
+      }
+
+      // Final fallback
+      GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo (final)');
     }
   }
 

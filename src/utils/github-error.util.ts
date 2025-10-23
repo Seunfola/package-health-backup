@@ -23,12 +23,12 @@ export class GitHubErrorHandler {
       data,
     });
 
-    // Handle 404
+    // 404 — Repo does not exist
     if (status === 404 || message.includes('Not Found')) {
       throw new HttpException(
         {
           message: `Repository '${owner}/${repo}' was not found.`,
-          hint: 'Ensure the owner/repo name is correct.',
+          hint: 'Ensure the owner/repo name is correct or repository is public.',
           reason: 'NOT_FOUND',
           context,
         },
@@ -36,12 +36,29 @@ export class GitHubErrorHandler {
       );
     }
 
-    // Handle unauthorized/private access
+    // Invalid / expired token
+    if (
+      [401, 403].includes(status) &&
+      (message.toLowerCase().includes('bad credentials') ||
+        message.toLowerCase().includes('invalid token'))
+    ) {
+      throw new HttpException(
+        {
+          message: `Invalid or expired GitHub token provided.`,
+          hint: 'Generate a new personal access token with "repo" scope.',
+          reason: 'INVALID_TOKEN',
+          context,
+        },
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    // Private or unauthorized repository access
     if ([401, 403].includes(status)) {
       throw new HttpException(
         {
-          message: `Repository '${owner}/${repo}' is private or requires a valid token.`,
-          hint: 'Provide a valid GitHub personal access token.',
+          message: `Repository '${owner}/${repo}' is private or requires authentication.`,
+          hint: 'Provide a valid GitHub personal access token for private repositories.',
           reason: 'PRIVATE_OR_UNAUTHORIZED',
           context,
         },
@@ -49,8 +66,12 @@ export class GitHubErrorHandler {
       );
     }
 
-    // Handle rate limit exceeded
-    if (status === 429 || message.toLowerCase().includes('rate limit')) {
+    // Rate limit exceeded
+    if (
+      status === 429 ||
+      message.toLowerCase().includes('rate limit') ||
+      data?.message?.toLowerCase().includes('api rate limit exceeded')
+    ) {
       throw new HttpException(
         {
           message:
@@ -62,7 +83,7 @@ export class GitHubErrorHandler {
       );
     }
 
-    // Catch network/timeout cases
+    // Network issues / timeouts
     if (
       message.toLowerCase().includes('timeout') ||
       message.toLowerCase().includes('network')
