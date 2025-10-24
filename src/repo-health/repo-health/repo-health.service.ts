@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { HttpService } from '@nestjs/axios';
@@ -33,37 +33,47 @@ type DependencyAnalysisResult = {
   daysBehind: number;
 };
 
-
 type CacheEntry<T> = { createdAt: number; ttlMs: number; value: T };
 
 class Semaphore {
   private queue: Array<() => void> = [];
   private counter: number = 0;
+
   constructor(private readonly max: number) {}
+
   async acquire(): Promise<() => void> {
-    if (this.counter < this.max) {
-      this.counter++;
-      return () => {
-        this.counter--;
-        const next = this.queue.shift();
-        if (next) next();
-      };
-    }
     return new Promise<() => void>((resolve) => {
-      this.queue.push(() => {
-        this.counter++;
-        resolve(() => {
-          this.counter--;
-          const next = this.queue.shift();
-          if (next) next();
-        });
-      });
+      const tryAcquire = () => {
+        if (this.counter < this.max) {
+          this.counter++;
+          resolve(() => {
+            this.counter = Math.max(0, this.counter - 1); // Prevent negative
+            process.nextTick(() => this.tryReleaseNext());
+          });
+          return true;
+        }
+        return false;
+      };
+
+      if (!tryAcquire()) {
+        this.queue.push(tryAcquire);
+      }
     });
+  }
+
+  private tryReleaseNext(): void {
+    if (this.queue.length > 0 && this.counter < this.max) {
+      const next = this.queue.shift();
+      if (next) {
+        process.nextTick(next);
+      }
+    }
   }
 }
 
 @Injectable()
 export class RepoHealthService {
+  private readonly logger = new Logger(RepoHealthService.name);
   private readonly analysisSemaphore = new Semaphore(4);
   private visibilityCache = new Map<
     string,
@@ -72,14 +82,39 @@ export class RepoHealthService {
   private VISIBILITY_TTL = 1000 * 60 * 60;
 
   private readonly cache = new Map<string, CacheEntry<unknown>>();
+  private readonly CACHE_CLEANUP_INTERVAL = 1000 * 60 * 30; // 30 minutes
 
   private _dockerAvailable: boolean | null = null;
+
   constructor(
     @InjectModel(RepoHealth.name)
     private readonly repoHealthModel: Model<RepoHealthDocument>,
     private readonly httpService: HttpService,
     private readonly dependencyAnalyzer: DependencyAnalyzerService,
-  ) {}
+  ) {
+    this.startCacheCleanup();
+  }
+
+  private startCacheCleanup(): void {
+    setInterval(() => this.cleanupExpiredCache(), this.CACHE_CLEANUP_INTERVAL);
+    this.logger.log('Cache cleanup scheduler started');
+  }
+
+  private cleanupExpiredCache(): void {
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const [key, entry] of this.cache.entries()) {
+      if (now - entry.createdAt > entry.ttlMs) {
+        this.cache.delete(key);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      this.logger.debug(`Cleaned ${cleanedCount} expired cache entries`);
+    }
+  }
 
   private buildHeaders(token?: string): Record<string, string> {
     const headers: Record<string, string> = {
@@ -113,7 +148,6 @@ export class RepoHealthService {
     }
   }
 
-  // Expose as readonly getter
   get dockerAvailable(): boolean {
     return this.detectDocker();
   }
@@ -125,7 +159,8 @@ export class RepoHealthService {
     try {
       const record = await this.repoHealthModel.findOne({ owner, repo }).exec();
       return record;
-    } catch {
+    } catch (error) {
+      this.logger.error(`Failed to find repository ${owner}/${repo}:`, error);
       throw new HttpException(
         'Failed to find repository',
         HttpStatus.INTERNAL_SERVER_ERROR,
@@ -164,7 +199,8 @@ export class RepoHealthService {
         .exec();
 
       return records;
-    } catch {
+    } catch (error) {
+      this.logger.error('Failed to find repositories:', error);
       throw new HttpException(
         'Failed to find repositories',
         HttpStatus.INTERNAL_SERVER_ERROR,
@@ -175,7 +211,8 @@ export class RepoHealthService {
   async findAll(): Promise<RepoHealthDocument[]> {
     try {
       return await this.repoHealthModel.find().exec();
-    } catch {
+    } catch (error) {
+      this.logger.error('Failed to retrieve all repositories:', error);
       throw new HttpException(
         'Failed to retrieve all repositories',
         HttpStatus.INTERNAL_SERVER_ERROR,
@@ -202,20 +239,38 @@ export class RepoHealthService {
           updatedAt: new Date(),
         })),
       }));
-    } catch {
+    } catch (error) {
+      this.logger.error('Failed to get repository statuses:', error);
       return [];
     }
   }
 
-  async findRepoHealth(owner: string, repo: string) {
-    const record = await this.repoHealthModel.findOne({ owner, repo }).exec();
-    if (!record) {
+  async findRepoHealth(
+    owner: string,
+    repo: string,
+  ): Promise<RepoHealthDocument> {
+    try {
+      const record = await this.repoHealthModel.findOne({ owner, repo }).exec();
+      if (!record) {
+        throw new HttpException(
+          `No analysis found for ${owner}/${repo}`,
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      return record;
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      this.logger.error(
+        `Failed to find repo health for ${owner}/${repo}:`,
+        error,
+      );
       throw new HttpException(
-        `No analysis found for ${owner}/${repo}`,
-        HttpStatus.NOT_FOUND,
+        'Failed to retrieve repository health',
+        HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
-    return record.toObject();
   }
 
   async analyzeRepo(
@@ -224,109 +279,116 @@ export class RepoHealthService {
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
     token?: string,
-  ) {
+  ): Promise<RepoHealthDocument> {
     const repoKey = `repo:${owner}/${repo}`;
-    const repoData = await this.requestWithCache<GitHubRepoResponse>(
-      repoKey,
-      async () => {
-        const data = await this.fetchRepo(owner, repo, token);
-        if (!data) {
-          throw new HttpException(
-            `Repository ${owner}/${repo} not found`,
-            HttpStatus.NOT_FOUND,
-          );
-        }
-        return data;
-      },
-      1000 * 60 * 5,
-    );
 
-    const commitActivity = await this.requestWithCache<CommitActivityItem[]>(
-      `commits:${owner}/${repo}`,
-      () => this.fetchCommitActivity(owner, repo, token),
-      1000 * 60 * 3,
-    );
+    try {
+      const repoData = await this.requestWithCache<GitHubRepoResponse>(
+        repoKey,
+        async () => {
+          const data = await this.fetchRepo(owner, repo, token);
+          if (!data) {
+            throw new HttpException(
+              `Repository ${owner}/${repo} not found`,
+              HttpStatus.NOT_FOUND,
+            );
+          }
+          return data;
+        },
+        1000 * 60 * 5,
+      );
 
-    const securityAlerts = await this.requestWithCache<any[]>(
-      `alerts:${owner}/${repo}`,
-      () => this.fetchSecurityAlerts(owner, repo, token),
-      1000 * 60 * 3,
-    );
+      const [commitActivity, securityAlerts, dependencyAnalysis] =
+        await Promise.all([
+          this.requestWithCache<CommitActivityItem[]>(
+            `commits:${owner}/${repo}`,
+            () => this.fetchCommitActivity(owner, repo, token),
+            1000 * 60 * 3,
+          ),
+          this.requestWithCache<any[]>(
+            `alerts:${owner}/${repo}`,
+            () => this.fetchSecurityAlerts(owner, repo, token),
+            1000 * 60 * 3,
+          ),
+          this._processDependencies(file, rawJson),
+        ]);
 
-    // Use refactored dependency analysis result
-    const {
-      dependencyHealth,
-      riskyDependencies,
-      bundleSize,
-      licenseRisks,
-      popularity,
-      daysBehind,
-    } = await this._processDependencies(file, rawJson);
+      const overallHealth = this._calculateHealthScore(
+        repoData,
+        commitActivity,
+        securityAlerts,
+        dependencyAnalysis.dependencyHealth,
+      );
 
-    const overallHealth = this._calculateHealthScore(
-      repoData,
-      commitActivity,
-      securityAlerts,
-      dependencyHealth,
-    );
+      const repo_id = `${owner}/${repo}`;
 
-    const repo_id = `${owner}/${repo}`;
+      const updated = await this.repoHealthModel.findOneAndUpdate(
+        { repo_id },
+        {
+          repo_id,
+          owner,
+          repo,
+          name: repoData.name,
+          stars: repoData.stargazers_count,
+          forks: repoData.forks_count,
+          open_issues: repoData.open_issues_count,
+          last_pushed: new Date(repoData.pushed_at),
+          commit_activity: Array.isArray(commitActivity)
+            ? commitActivity.map((c) =>
+                typeof c.total === 'number' ? c.total : 0,
+              )
+            : [],
+          security_alerts: Array.isArray(securityAlerts)
+            ? securityAlerts.length
+            : 0,
+          dependency_health: dependencyAnalysis.dependencyHealth,
+          risky_dependencies: dependencyAnalysis.riskyDependencies,
+          overall_health: overallHealth,
+          bundle_size: dependencyAnalysis.bundleSize,
+          license_risks: dependencyAnalysis.licenseRisks,
+          popularity: dependencyAnalysis.popularity,
+          days_behind: dependencyAnalysis.daysBehind,
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      );
 
-    const updated = await this.repoHealthModel.findOneAndUpdate(
-      { repo_id },
-      {
-        repo_id,
-        owner,
-        repo,
-        name: repoData.name,
-        stars: repoData.stargazers_count,
-        forks: repoData.forks_count,
-        open_issues: repoData.open_issues_count,
-        last_pushed: new Date(repoData.pushed_at),
-        commit_activity: Array.isArray(commitActivity)
-          ? commitActivity.map((c) =>
-              typeof c.total === 'number' ? c.total : 0,
-            )
-          : [],
-        security_alerts: Array.isArray(securityAlerts)
-          ? securityAlerts.length
-          : 0,
-        dependency_health: dependencyHealth,
-        risky_dependencies: riskyDependencies,
-        overall_health: overallHealth,
-        bundle_size: bundleSize,
-        license_risks: licenseRisks,
-        popularity,
-        days_behind: daysBehind,
-      },
-      { new: true, upsert: true, setDefaultsOnInsert: true },
-    );
-
-    return updated.toObject();
+      return updated;
+    } catch (error) {
+      this.logger.error(
+        `Failed to analyze repository ${owner}/${repo}:`,
+        error,
+      );
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(
+        'Failed to analyze repository',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   async processDependencies(
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
   ): Promise<DependencyAnalysisResult> {
-    const result = await this._processDependencies(file, rawJson);
-    // Ensure result contains all required fields for DependencyAnalysisResult
-    return {
-      dependencyHealth: result.dependencyHealth,
-      riskyDependencies: result.riskyDependencies,
-      bundleSize: result.bundleSize,
-      licenseRisks: result.licenseRisks,
-      popularity: result.popularity,
-      daysBehind: result.daysBehind,
-    };
+    return await this._processDependencies(file, rawJson);
   }
 
-  async getCommitActivity(owner: string, repo: string, token?: string) {
+  async getCommitActivity(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<CommitActivityItem[]> {
     return await this.fetchCommitActivity(owner, repo, token);
   }
 
-  async getSecurityAlerts(owner: string, repo: string, token?: string) {
-    return this.fetchSecurityAlerts(owner, repo, token);
+  async getSecurityAlerts(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<any[]> {
+    return await this.fetchSecurityAlerts(owner, repo, token);
   }
 
   calculateHealthScore(
@@ -348,44 +410,51 @@ export class RepoHealthService {
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
     token?: string,
-  ) {
+  ): Promise<RepoHealthDocument> {
     const { owner, repo } = this.parseGitHubUrl(url);
-
     return this.analyzeRepo(owner, repo, file, rawJson, token);
   }
 
-  async analyzeJson(rawJson: string | Record<string, unknown>) {
-    const parsed = this._parseJson(rawJson);
-    const deps = this._extractDependencies(parsed) ?? {};
-    const analysis = await this.dependencyAnalyzer.analyzeDependencies(deps);
+  async analyzeJson(rawJson: string | Record<string, unknown>): Promise<any> {
+    try {
+      const parsed = this._parseJson(rawJson);
+      const deps = this._extractDependencies(parsed) ?? {};
+      const analysis = await this.dependencyAnalyzer.analyzeDependencies(deps);
 
-    let projectName = 'unknown';
-    if ('name' in parsed && typeof parsed.name === 'string') {
-      projectName = parsed.name;
+      let projectName = 'unknown';
+      if ('name' in parsed && typeof parsed.name === 'string') {
+        projectName = parsed.name;
+      }
+
+      const totalDependencies = Object.keys(deps).length;
+
+      return {
+        project_name: projectName,
+        total_dependencies: totalDependencies,
+        dependencies: deps,
+        dependency_health: {
+          score: analysis.score,
+          health: analysis.health,
+          total_vulnerabilities: analysis.totalVulns ?? 0,
+          total_outdated: analysis.totalOutdated ?? 0,
+        },
+        risky_dependencies: analysis.risky ?? [],
+        outdated_dependencies: analysis.outdated ?? [],
+        unstable_dependencies: analysis.unstable ?? [],
+      };
+    } catch (error) {
+      this.logger.error('Failed to analyze JSON:', error);
+      throw new HttpException(
+        'Failed to analyze package.json',
+        HttpStatus.BAD_REQUEST,
+      );
     }
-
-    const totalDependencies = Object.keys(deps).length;
-
-    return {
-      project_name: projectName,
-      total_dependencies: totalDependencies,
-      dependencies: deps,
-      dependency_health: {
-        score: analysis.score,
-        health: analysis.health,
-        total_vulnerabilities: analysis.totalVulns ?? 0,
-        total_outdated: analysis.totalOutdated ?? 0,
-      },
-      risky_dependencies: analysis.risky ?? [],
-      outdated_dependencies: analysis.outdated ?? [],
-      unstable_dependencies: analysis.unstable ?? [],
-    };
   }
 
   private _getDependencies(
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
-  ) {
+  ): Record<string, string> {
     if (rawJson) return this._getDependenciesFromJson(rawJson);
     if (file) return this._getDependenciesFromFile(file);
     return {};
@@ -397,37 +466,47 @@ export class RepoHealthService {
   ): Promise<DependencyAnalysisResult> {
     let deps: Record<string, string> = {};
 
-    if (rawJson) {
-      deps = this._getDependenciesFromJson(rawJson);
-    } else if (file) {
-      deps = this._getDependenciesFromFile(file);
-    }
-
-    if (!deps || Object.keys(deps).length === 0) {
-      return {
-        dependencyHealth: 100,
-        riskyDependencies: [],
-        bundleSize: 0,
-        licenseRisks: [],
-        popularity: 0,
-        daysBehind: 0,
-      };
-    }
-
-    const release = await this.analysisSemaphore.acquire();
     try {
-      const analysis = await this.dependencyAnalyzer.analyzeDependencies(deps);
-      return {
-        dependencyHealth: analysis?.score ?? 100,
-        riskyDependencies: analysis?.risky ?? [],
-        bundleSize: analysis?.bundleSize ?? 0,
-        licenseRisks: analysis?.licenseRisks ?? [],
-        popularity: analysis?.popularity ?? 0,
-        daysBehind: analysis?.daysBehind ?? 0,
-      };
-    } finally {
-      release();
+      if (rawJson) {
+        deps = this._getDependenciesFromJson(rawJson);
+      } else if (file) {
+        deps = this._getDependenciesFromFile(file);
+      }
+
+      if (!deps || Object.keys(deps).length === 0) {
+        return this.getDefaultDependencyAnalysis();
+      }
+
+      const release = await this.analysisSemaphore.acquire();
+      try {
+        const analysis =
+          await this.dependencyAnalyzer.analyzeDependencies(deps);
+        return {
+          dependencyHealth: analysis?.score ?? 100,
+          riskyDependencies: analysis?.risky ?? [],
+          bundleSize: analysis?.bundleSize ?? 0,
+          licenseRisks: analysis?.licenseRisks ?? [],
+          popularity: analysis?.popularity ?? 0,
+          daysBehind: analysis?.daysBehind ?? 0,
+        };
+      } finally {
+        release();
+      }
+    } catch (error) {
+      this.logger.error('Dependency analysis failed:', error);
+      return this.getDefaultDependencyAnalysis();
     }
+  }
+
+  private getDefaultDependencyAnalysis(): DependencyAnalysisResult {
+    return {
+      dependencyHealth: 100,
+      riskyDependencies: [],
+      bundleSize: 0,
+      licenseRisks: [],
+      popularity: 0,
+      daysBehind: 0,
+    };
   }
 
   private async requestWithCache<T>(
@@ -456,14 +535,16 @@ export class RepoHealthService {
         return await fn();
       } catch (err) {
         lastErr = err;
-        const delay = baseDelayMs * Math.pow(2, i);
-        await new Promise((res) => setTimeout(res, delay));
+        if (i < attempts - 1) {
+          const delay = baseDelayMs * Math.pow(2, i);
+          await new Promise((res) => setTimeout(res, delay));
+        }
       }
     }
     if (lastErr instanceof Error) {
       throw lastErr;
     } else {
-      throw new Error('request failed');
+      throw new Error('Request failed after retries');
     }
   }
 
@@ -487,7 +568,8 @@ export class RepoHealthService {
 
       const { owner, repo } = match.groups;
       return { owner, repo };
-    } catch {
+    } catch (error) {
+      this.logger.error('Failed to parse GitHub URL:', error);
       throw new HttpException(
         'Invalid GitHub repository URL',
         HttpStatus.BAD_REQUEST,
@@ -500,92 +582,62 @@ export class RepoHealthService {
     repo: string,
     token?: string,
   ): Promise<GitHubRepoResponse> {
-    const cacheKey = `${owner}/${repo}`;
-    const cached = this.visibilityCache.get(cacheKey);
+    const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
 
-    if (cached?.isPublic && cached.expiresAt > Date.now()) {
-      return (
-        await lastValueFrom(
-          this.httpService.get<GitHubRepoResponse>(
-            `https://api.github.com/repos/${owner}/${repo}`,
-            { headers: this.buildHeaders() },
-          ),
-        )
-      ).data;
-    }
-
-    try {
-      const res = await lastValueFrom(
-        this.httpService.get<GitHubRepoResponse>(
-          `https://api.github.com/repos/${owner}/${repo}`,
-          { headers: this.buildHeaders() },
-        ),
-      );
-
-      this.visibilityCache.set(cacheKey, {
-        isPublic: true,
-        expiresAt: Date.now() + 1000 * 60 * 60,
-      });
-
-      return res.data;
-    } catch (err: any) {
-      const status = err?.response?.status ?? 0;
-      const msg = err?.response?.data?.message ?? '';
-
-      if (status === 404) {
+    if (token) {
+      try {
+        const res = await lastValueFrom(
+          this.httpService.get<GitHubRepoResponse>(baseUrl, {
+            headers: this.buildHeaders(token),
+          }),
+        );
+        return res.data;
+      } catch (err: any) {
+        const status = err?.response?.status ?? 0;
+        if (status === 401 || status === 403) {
+          throw new HttpException(
+            'Invalid or expired GitHub token provided.',
+            HttpStatus.BAD_REQUEST,
+          );
+        } else if (status === 404) {
+          throw new HttpException(
+            `Repository '${owner}/${repo}' not found.`,
+            HttpStatus.NOT_FOUND,
+          );
+        }
+        GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo (with token)');
         throw new HttpException(
-          `Repository '${owner}/${repo}' not found.`,
-          HttpStatus.NOT_FOUND,
+          `Failed to fetch repository '${owner}/${repo}'.`,
+          HttpStatus.INTERNAL_SERVER_ERROR,
         );
       }
-
-      if (status === 403 || status === 429) {
-        const rateLimitRemaining =
-          err.response?.headers?.['x-ratelimit-remaining'];
-        if (rateLimitRemaining === '0' || status === 429) {
+    } else {
+      try {
+        const res = await lastValueFrom(
+          this.httpService.get<GitHubRepoResponse>(baseUrl, {
+            headers: this.buildHeaders(),
+          }),
+        );
+        return res.data;
+      } catch (err: any) {
+        const status = err?.response?.status ?? 0;
+        if (status === 401 || status === 403 || status === 404) {
           throw new HttpException(
-            'GitHub API rate limit exceeded. Try again later.',
-            HttpStatus.TOO_MANY_REQUESTS,
+            `Repository '${owner}/${repo}' not found. If the repository is private, please provide a valid GitHub token.`,
+            HttpStatus.NOT_FOUND,
           );
         }
+        GitHubErrorHandler.handle(
+          owner,
+          repo,
+          err,
+          'fetchRepo (without token)',
+        );
+        throw new HttpException(
+          `Failed to fetch repository '${owner}/${repo}'.`,
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
       }
-
-
-      if (status === 401 && token) {
-        try {
-          const authRes = await lastValueFrom(
-            this.httpService.get<GitHubRepoResponse>(
-              `https://api.github.com/repos/${owner}/${repo}`,
-              { headers: this.buildHeaders(token) },
-            ),
-          );
-
-          this.visibilityCache.set(cacheKey, {
-            isPublic: false,
-            expiresAt: Date.now() + 1000 * 60 * 60,
-          });
-
-          return authRes.data;
-        } catch (authErr: any) {
-          const authStatus = authErr?.response?.status ?? 0;
-          const authMsg = authErr?.response?.data?.message ?? '';
-
-          if (
-            authStatus === 401 ||
-            authMsg.toLowerCase().includes('bad credentials')
-          ) {
-            throw new HttpException(
-              'Invalid or expired GitHub token provided.',
-              HttpStatus.BAD_REQUEST,
-            );
-          }
-
-          GitHubErrorHandler.handle(owner, repo, authErr, 'fetchRepo (authed)');
-        }
-      }
-
-      // fallback for any other errors
-      GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo (final)');
     }
   }
 
@@ -594,54 +646,21 @@ export class RepoHealthService {
     repo: string,
     token?: string,
   ): Promise<CommitActivityItem[]> {
-    const url = `https://api.github.com/repos/${owner}/${repo}/stats/commit_activity`;
-
     try {
+      const headers = this.buildHeaders(token);
+      const url = `https://api.github.com/repos/${owner}/${repo}/stats/commit_activity`;
       const res = await lastValueFrom(
-        this.httpService.get(url, { headers: this.buildHeaders() }),
+        this.httpService.get<unknown>(url, { headers }),
       );
-      if (res.status === 202) return []; // GitHub is processing stats
+
+      if (res.status === 202) return [];
       const data = res.data;
       if (!Array.isArray(data)) return [];
-      return data.map((item) => ({
+      return data.map((item: any) => ({
         week: typeof item.week === 'number' ? item.week : 0,
         total: typeof item.total === 'number' ? item.total : 0,
       }));
-    } catch (err: any) {
-      const status = err?.response?.status ?? 0;
-
-      if ([401, 403].includes(status)) {
-        if (!token) {
-          throw new HttpException(
-            'Repository is private. Please provide a GitHub token.',
-            HttpStatus.UNAUTHORIZED,
-          );
-        }
-
-        // retry authenticated
-        for (let i = 0; i < 5; i++) {
-          try {
-            const authRes = await lastValueFrom(
-              this.httpService.get(url, { headers: this.buildHeaders(token) }),
-            );
-            if (authRes.status === 202) {
-              await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
-              continue;
-            }
-            const data = authRes.data;
-            if (!Array.isArray(data)) return [];
-            return data.map((item) => ({
-              week: typeof item.week === 'number' ? item.week : 0,
-              total: typeof item.total === 'number' ? item.total : 0,
-            }));
-          } catch {
-            // ignore and retry
-          }
-        }
-
-        return [];
-      }
-
+    } catch (err) {
       GitHubErrorHandler.handle(owner, repo, err, 'fetchCommitActivity');
       return [];
     }
@@ -652,56 +671,14 @@ export class RepoHealthService {
     repo: string,
     token?: string,
   ): Promise<any[]> {
-    const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
-
     try {
-      const res = await lastValueFrom(
-        this.httpService.get(url, { headers: this.buildHeaders() }),
-      );
-      if (res.status === 204) return [true]; // alerts enabled
-      if (res.status === 404) return []; // alerts not enabled
+      const headers = this.buildHeaders(token);
+      const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
+      const res = await lastValueFrom(this.httpService.get(url, { headers }));
+      if (res.status === 204) return [true];
+      if (res.status === 404) return [];
       return [];
-    } catch (err: any) {
-      const status = err?.response?.status ?? 0;
-
-      if ([401, 403].includes(status)) {
-        if (!token) {
-          throw new HttpException(
-            'Repository is private. Please provide a GitHub token.',
-            HttpStatus.UNAUTHORIZED,
-          );
-        }
-
-        try {
-          const authRes = await lastValueFrom(
-            this.httpService.get(url, { headers: this.buildHeaders(token) }),
-          );
-          if (authRes.status === 204) return [true];
-          if (authRes.status === 404) return [];
-          return [];
-        } catch (authErr: any) {
-          const authStatus = authErr?.response?.status ?? 0;
-          const msg = authErr?.response?.data?.message ?? '';
-          if (
-            authStatus === 401 ||
-            msg.toLowerCase().includes('bad credentials')
-          ) {
-            throw new HttpException(
-              'Invalid or expired GitHub token provided.',
-              HttpStatus.BAD_REQUEST,
-            );
-          }
-          GitHubErrorHandler.handle(
-            owner,
-            repo,
-            authErr,
-            'fetchSecurityAlerts (authed)',
-          );
-          return [];
-        }
-      }
-
-      if (status === 404) return [];
+    } catch (err) {
       GitHubErrorHandler.handle(owner, repo, err, 'fetchSecurityAlerts');
       return [];
     }
@@ -722,7 +699,8 @@ export class RepoHealthService {
       }
       return parsed as Record<string, unknown>;
     } catch (err) {
-      GitHubErrorHandler.handle('N/A', 'N/A', err, '_parseJson');
+      this.logger.error('Failed to parse JSON:', err);
+      throw new HttpException('Invalid JSON structure', HttpStatus.BAD_REQUEST);
     }
   }
 
@@ -748,47 +726,52 @@ export class RepoHealthService {
     rawJson: string | Record<string, unknown>,
     isLockFile = false,
   ): Record<string, string> {
-    const parsed = this._parseJson(rawJson);
+    try {
+      const parsed = this._parseJson(rawJson);
 
-    if (isLockFile) {
-      const deps: Record<string, string> = {};
-      const extractDeps = (packages: unknown) => {
-        if (typeof packages !== 'object' || packages === null) return;
+      if (isLockFile) {
+        const deps: Record<string, string> = {};
+        const extractDeps = (packages: unknown) => {
+          if (typeof packages !== 'object' || packages === null) return;
 
-        for (const [name, info] of Object.entries(
-          packages as Record<string, unknown>,
-        )) {
-          if (
-            typeof info === 'object' &&
-            info !== null &&
-            'version' in info &&
-            typeof (info as { version?: unknown }).version === 'string'
-          ) {
-            deps[name] = (info as { version: string }).version;
+          for (const [name, info] of Object.entries(
+            packages as Record<string, unknown>,
+          )) {
             if (
-              'dependencies' in info &&
-              typeof (info as { dependencies?: unknown }).dependencies ===
-                'object' &&
-              (info as { dependencies?: unknown }).dependencies !== null
+              typeof info === 'object' &&
+              info !== null &&
+              'version' in info &&
+              typeof (info as { version?: unknown }).version === 'string'
             ) {
-              extractDeps((info as { dependencies: unknown }).dependencies);
+              deps[name] = (info as { version: string }).version;
+              if (
+                'dependencies' in info &&
+                typeof (info as { dependencies?: unknown }).dependencies ===
+                  'object' &&
+                (info as { dependencies?: unknown }).dependencies !== null
+              ) {
+                extractDeps((info as { dependencies: unknown }).dependencies);
+              }
             }
           }
+        };
+        if (
+          parsed &&
+          typeof parsed === 'object' &&
+          'dependencies' in parsed &&
+          typeof parsed.dependencies === 'object' &&
+          parsed.dependencies !== null
+        ) {
+          extractDeps(parsed.dependencies);
         }
-      };
-      if (
-        parsed &&
-        typeof parsed === 'object' &&
-        'dependencies' in parsed &&
-        typeof parsed.dependencies === 'object' &&
-        parsed.dependencies !== null
-      ) {
-        extractDeps(parsed.dependencies);
+        return deps;
       }
-      return deps;
-    }
 
-    return this._extractDependencies(parsed);
+      return this._extractDependencies(parsed);
+    } catch (error) {
+      this.logger.error('Failed to extract dependencies from JSON:', error);
+      return {};
+    }
   }
 
   public _getDependenciesFromFile(
@@ -830,11 +813,16 @@ export class RepoHealthService {
 
         return deps;
       } catch (err) {
+        this.logger.error('Failed to extract dependencies from zip file:', err);
         GitHubErrorHandler.handle(
           'N/A',
           'N/A',
           err,
           '_getDependenciesFromFile',
+        );
+        throw new HttpException(
+          'Failed to process zip file',
+          HttpStatus.BAD_REQUEST,
         );
       }
     }
