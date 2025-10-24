@@ -8,7 +8,6 @@ import { RepoHealth, RepoHealthDocument } from './repo-health.model';
 import AdmZip from 'adm-zip';
 import path from 'path';
 import fs from 'fs';
-import { GitHubErrorHandler } from 'src/utils/github-error.util';
 
 interface GitHubRepoResponse {
   name: string;
@@ -17,6 +16,7 @@ interface GitHubRepoResponse {
   forks_count: number;
   open_issues_count: number;
   pushed_at: string;
+  private?: boolean;
 }
 
 interface CommitActivityItem {
@@ -47,7 +47,7 @@ class Semaphore {
         if (this.counter < this.max) {
           this.counter++;
           resolve(() => {
-            this.counter = Math.max(0, this.counter - 1); // Prevent negative
+            this.counter = Math.max(0, this.counter - 1);
             process.nextTick(() => this.tryReleaseNext());
           });
           return true;
@@ -75,14 +75,8 @@ class Semaphore {
 export class RepoHealthService {
   private readonly logger = new Logger(RepoHealthService.name);
   private readonly analysisSemaphore = new Semaphore(4);
-  private visibilityCache = new Map<
-    string,
-    { isPublic: boolean; expiresAt: number }
-  >();
-  private VISIBILITY_TTL = 1000 * 60 * 60;
-
   private readonly cache = new Map<string, CacheEntry<unknown>>();
-  private readonly CACHE_CLEANUP_INTERVAL = 1000 * 60 * 30; // 30 minutes
+  private readonly CACHE_CLEANUP_INTERVAL = 1000 * 60 * 30;
 
   private _dockerAvailable: boolean | null = null;
 
@@ -123,7 +117,6 @@ export class RepoHealthService {
     };
 
     const effectiveToken = token?.trim();
-
     if (effectiveToken) {
       headers['Authorization'] = effectiveToken.startsWith('ghp_')
         ? `token ${effectiveToken}`
@@ -139,7 +132,6 @@ export class RepoHealthService {
     try {
       const detected =
         fs.existsSync('/.dockerenv') || fs.existsSync('/var/run/docker.sock');
-
       this._dockerAvailable = detected;
       return detected;
     } catch {
@@ -157,8 +149,7 @@ export class RepoHealthService {
     repo: string,
   ): Promise<RepoHealthDocument | null> {
     try {
-      const record = await this.repoHealthModel.findOne({ owner, repo }).exec();
-      return record;
+      return await this.repoHealthModel.findOne({ owner, repo }).exec();
     } catch (error) {
       this.logger.error(`Failed to find repository ${owner}/${repo}:`, error);
       throw new HttpException(
@@ -177,28 +168,19 @@ export class RepoHealthService {
   }): Promise<RepoHealthDocument[]> {
     try {
       const { owner, repo, minHealthScore, limit = 50, offset = 0 } = query;
-
       const mongoQuery: Record<string, unknown> = {};
 
-      if (owner) {
-        mongoQuery['owner'] = owner;
-      }
-
-      if (repo) {
-        mongoQuery['repo'] = repo;
-      }
-
+      if (owner) mongoQuery['owner'] = owner;
+      if (repo) mongoQuery['repo'] = repo;
       if (minHealthScore !== undefined) {
         mongoQuery['overall_health.score'] = { $gte: minHealthScore };
       }
 
-      const records = await this.repoHealthModel
+      return await this.repoHealthModel
         .find(mongoQuery)
         .skip(offset)
         .limit(limit)
         .exec();
-
-      return records;
     } catch (error) {
       this.logger.error('Failed to find repositories:', error);
       throw new HttpException(
@@ -259,9 +241,7 @@ export class RepoHealthService {
       }
       return record;
     } catch (error) {
-      if (error instanceof HttpException) {
-        throw error;
-      }
+      if (error instanceof HttpException) throw error;
       this.logger.error(
         `Failed to find repo health for ${owner}/${repo}:`,
         error,
@@ -283,23 +263,23 @@ export class RepoHealthService {
     const repoKey = `repo:${owner}/${repo}`;
 
     try {
+      // Always try to get repo data first - this is the most critical
       const repoData = await this.requestWithCache<GitHubRepoResponse>(
         repoKey,
-        async () => {
-          const data = await this.fetchRepo(owner, repo, token);
-          if (!data) {
-            throw new HttpException(
-              `Repository ${owner}/${repo} not found`,
-              HttpStatus.NOT_FOUND,
-            );
-          }
-          return data;
-        },
+        () => this.fetchRepo(owner, repo, token),
         1000 * 60 * 5,
       );
 
+      if (!repoData) {
+        throw new HttpException(
+          `Repository ${owner}/${repo} not found`,
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      // Get other data in parallel but make them completely optional
       const [commitActivity, securityAlerts, dependencyAnalysis] =
-        await Promise.all([
+        await Promise.allSettled([
           this.requestWithCache<CommitActivityItem[]>(
             `commits:${owner}/${repo}`,
             () => this.fetchCommitActivity(owner, repo, token),
@@ -313,11 +293,21 @@ export class RepoHealthService {
           this._processDependencies(file, rawJson),
         ]);
 
+      // Extract values from settled promises
+      const commitActivityValue =
+        commitActivity.status === 'fulfilled' ? commitActivity.value : [];
+      const securityAlertsValue =
+        securityAlerts.status === 'fulfilled' ? securityAlerts.value : [];
+      const dependencyAnalysisValue =
+        dependencyAnalysis.status === 'fulfilled'
+          ? dependencyAnalysis.value
+          : this.getDefaultDependencyAnalysis();
+
       const overallHealth = this._calculateHealthScore(
         repoData,
-        commitActivity,
-        securityAlerts,
-        dependencyAnalysis.dependencyHealth,
+        Array.isArray(commitActivityValue) ? commitActivityValue : [],
+        Array.isArray(securityAlertsValue) ? securityAlertsValue : [],
+        dependencyAnalysisValue.dependencyHealth,
       );
 
       const repo_id = `${owner}/${repo}`;
@@ -333,21 +323,21 @@ export class RepoHealthService {
           forks: repoData.forks_count,
           open_issues: repoData.open_issues_count,
           last_pushed: new Date(repoData.pushed_at),
-          commit_activity: Array.isArray(commitActivity)
-            ? commitActivity.map((c) =>
+          commit_activity: Array.isArray(commitActivityValue)
+            ? commitActivityValue.map((c) =>
                 typeof c.total === 'number' ? c.total : 0,
               )
             : [],
-          security_alerts: Array.isArray(securityAlerts)
-            ? securityAlerts.length
+          security_alerts: Array.isArray(securityAlertsValue)
+            ? securityAlertsValue.length
             : 0,
-          dependency_health: dependencyAnalysis.dependencyHealth,
-          risky_dependencies: dependencyAnalysis.riskyDependencies,
+          dependency_health: dependencyAnalysisValue.dependencyHealth,
+          risky_dependencies: dependencyAnalysisValue.riskyDependencies,
           overall_health: overallHealth,
-          bundle_size: dependencyAnalysis.bundleSize,
-          license_risks: dependencyAnalysis.licenseRisks,
-          popularity: dependencyAnalysis.popularity,
-          days_behind: dependencyAnalysis.daysBehind,
+          bundle_size: dependencyAnalysisValue.bundleSize,
+          license_risks: dependencyAnalysisValue.licenseRisks,
+          popularity: dependencyAnalysisValue.popularity,
+          days_behind: dependencyAnalysisValue.daysBehind,
         },
         { new: true, upsert: true, setDefaultsOnInsert: true },
       );
@@ -358,9 +348,7 @@ export class RepoHealthService {
         `Failed to analyze repository ${owner}/${repo}:`,
         error,
       );
-      if (error instanceof HttpException) {
-        throw error;
-      }
+      if (error instanceof HttpException) throw error;
       throw new HttpException(
         'Failed to analyze repository',
         HttpStatus.INTERNAL_SERVER_ERROR,
@@ -449,15 +437,6 @@ export class RepoHealthService {
         HttpStatus.BAD_REQUEST,
       );
     }
-  }
-
-  private _getDependencies(
-    file?: Express.Multer.File,
-    rawJson?: string | Record<string, unknown>,
-  ): Record<string, string> {
-    if (rawJson) return this._getDependenciesFromJson(rawJson);
-    if (file) return this._getDependenciesFromFile(file);
-    return {};
   }
 
   private async _processDependencies(
@@ -583,56 +562,57 @@ export class RepoHealthService {
     token?: string,
   ): Promise<GitHubRepoResponse> {
     const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
+    const headers = this.buildHeaders(token);
 
-    if (token) {
-      try {
-        const res = await lastValueFrom(
-          this.httpService.get<GitHubRepoResponse>(baseUrl, {
-            headers: this.buildHeaders(token),
-          }),
-        );
-        return res.data;
-      } catch (err: any) {
-        const status = err?.response?.status ?? 0;
-        if (status === 401 || status === 403) {
+    try {
+      const res = await lastValueFrom(
+        this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
+      );
+      return res.data;
+    } catch (err: any) {
+      const status = err?.response?.status ?? 0;
+
+      // For public repos, we should never fail due to missing token
+      if (status === 401 || status === 403) {
+        // If we have a token and it's invalid, throw specific error
+        if (token) {
           throw new HttpException(
             'Invalid or expired GitHub token provided.',
             HttpStatus.BAD_REQUEST,
           );
-        } else if (status === 404) {
+        }
+        // If no token, try without authentication (for public repos)
+        try {
+          const publicRes = await lastValueFrom(
+            this.httpService.get<GitHubRepoResponse>(baseUrl, {
+              headers: this.buildHeaders(), // No token
+            }),
+          );
+          return publicRes.data;
+        } catch (publicErr: any) {
+          const publicStatus = publicErr?.response?.status ?? 0;
+          if (publicStatus === 404) {
+            throw new HttpException(
+              `Repository '${owner}/${repo}' not found.`,
+              HttpStatus.NOT_FOUND,
+            );
+          }
+          this.logger.error(
+            `Failed to fetch public repo ${owner}/${repo}:`,
+            publicErr,
+          );
           throw new HttpException(
-            `Repository '${owner}/${repo}' not found.`,
-            HttpStatus.NOT_FOUND,
+            `Failed to fetch repository '${owner}/${repo}'.`,
+            HttpStatus.INTERNAL_SERVER_ERROR,
           );
         }
-        GitHubErrorHandler.handle(owner, repo, err, 'fetchRepo (with token)');
+      } else if (status === 404) {
         throw new HttpException(
-          `Failed to fetch repository '${owner}/${repo}'.`,
-          HttpStatus.INTERNAL_SERVER_ERROR,
+          `Repository '${owner}/${repo}' not found.`,
+          HttpStatus.NOT_FOUND,
         );
-      }
-    } else {
-      try {
-        const res = await lastValueFrom(
-          this.httpService.get<GitHubRepoResponse>(baseUrl, {
-            headers: this.buildHeaders(),
-          }),
-        );
-        return res.data;
-      } catch (err: any) {
-        const status = err?.response?.status ?? 0;
-        if (status === 401 || status === 403 || status === 404) {
-          throw new HttpException(
-            `Repository '${owner}/${repo}' not found. If the repository is private, please provide a valid GitHub token.`,
-            HttpStatus.NOT_FOUND,
-          );
-        }
-        GitHubErrorHandler.handle(
-          owner,
-          repo,
-          err,
-          'fetchRepo (without token)',
-        );
+      } else {
+        this.logger.error(`Failed to fetch repo ${owner}/${repo}:`, err);
         throw new HttpException(
           `Failed to fetch repository '${owner}/${repo}'.`,
           HttpStatus.INTERNAL_SERVER_ERROR,
@@ -660,9 +640,22 @@ export class RepoHealthService {
         week: typeof item.week === 'number' ? item.week : 0,
         total: typeof item.total === 'number' ? item.total : 0,
       }));
-    } catch (err) {
-      GitHubErrorHandler.handle(owner, repo, err, 'fetchCommitActivity');
-      return [];
+    } catch (err: any) {
+      const status = err?.response?.status ?? 0;
+
+      // For public repos, don't fail - just return empty data
+      if (status === 401 || status === 403 || status === 404) {
+        this.logger.debug(
+          `Commit activity not available for ${owner}/${repo}, status: ${status}`,
+        );
+        return [];
+      }
+
+      this.logger.debug(
+        `Failed to fetch commit activity for ${owner}/${repo}:`,
+        err.message,
+      );
+      return []; // Never fail for public repos
     }
   }
 
@@ -675,12 +668,19 @@ export class RepoHealthService {
       const headers = this.buildHeaders(token);
       const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
       const res = await lastValueFrom(this.httpService.get(url, { headers }));
+
       if (res.status === 204) return [true];
       if (res.status === 404) return [];
       return [];
-    } catch (err) {
-      GitHubErrorHandler.handle(owner, repo, err, 'fetchSecurityAlerts');
-      return [];
+    } catch (err: any) {
+      const status = err?.response?.status ?? 0;
+
+      // Security alerts often require specific permissions or may not be available
+      // For any error, just return empty array and don't fail the analysis
+      this.logger.debug(
+        `Security alerts not available for ${owner}/${repo}, status: ${status}`,
+      );
+      return []; // Never fail for any reason
     }
   }
 
@@ -756,7 +756,6 @@ export class RepoHealthService {
           }
         };
         if (
-          parsed &&
           typeof parsed === 'object' &&
           'dependencies' in parsed &&
           typeof parsed.dependencies === 'object' &&
@@ -814,12 +813,6 @@ export class RepoHealthService {
         return deps;
       } catch (err) {
         this.logger.error('Failed to extract dependencies from zip file:', err);
-        GitHubErrorHandler.handle(
-          'N/A',
-          'N/A',
-          err,
-          '_getDependenciesFromFile',
-        );
         throw new HttpException(
           'Failed to process zip file',
           HttpStatus.BAD_REQUEST,
@@ -882,7 +875,6 @@ export class RepoHealthService {
         ((repo.open_issues_count ?? 0) / ((repo.stargazers_count ?? 0) + 1)) *
           0.5,
     );
-
     const securityPenalty =
       securityAlerts && securityAlerts.length > 0 ? 0.5 : 1;
 
@@ -897,7 +889,6 @@ export class RepoHealthService {
       100;
 
     const score = Math.round(Math.max(0, Math.min(weighted, 100)));
-
     const label =
       score >= 80
         ? 'Excellent'
