@@ -138,48 +138,68 @@ export class RepoHealthService {
       | undefined;
 
     if (cached && Date.now() - cached.createdAt < cached.ttlMs) {
+      this.logger.debug(
+        `Using cached visibility for ${owner}/${repo}: ${cached.value}`,
+      );
       return cached.value;
     }
 
+    this.logger.debug(`Determining visibility for ${owner}/${repo}...`);
+
     try {
-      // Try to access without token
-      const headers = this.buildHeaders();
+      // Test without token - this is the definitive test for public repos
+      const headers = this.buildHeaders(); // No token
       const url = `https://api.github.com/repos/${owner}/${repo}`;
 
-      const res = await lastValueFrom(
-        this.httpService.get(url, {
-          headers,
-          timeout: 10000, // 10 second timeout
-        }),
-      );
+      const res = await lastValueFrom(this.httpService.get(url, { headers }));
 
-      // If we get here, it's public
+      // If we successfully access without token, it's DEFINITELY public
+      this.logger.debug(
+        `${owner}/${repo} is PUBLIC (accessible without token)`,
+      );
       const visibility: 'public' | 'private' = 'public';
       this.cache.set(cacheKey, {
         createdAt: Date.now(),
-        ttlMs: 1000 * 60 * 60,
+        ttlMs: 1000 * 60 * 60, // Cache for 1 hour
         value: visibility,
       });
       return visibility;
     } catch (err: any) {
       const status = err?.response?.status ?? 0;
+      this.logger.debug(
+        `Visibility test for ${owner}/${repo} failed with status: ${status}`,
+      );
 
       // Only consider it private if we get explicit 401/403
-      // For all other errors (timeouts, network issues, etc.), assume public
       if (status === 401 || status === 403) {
+        this.logger.debug(
+          `🔒 ${owner}/${repo} is PRIVATE (401/403 without token)`,
+        );
         const visibility: 'public' | 'private' = 'private';
         this.cache.set(cacheKey, {
           createdAt: Date.now(),
-          ttlMs: 1000 * 60 * 30,
+          ttlMs: 1000 * 60 * 30, // Cache for 30 minutes
           value: visibility,
         });
         return visibility;
-      } else {
-        // For 404, network errors, timeouts, etc. - assume public and let the main fetch handle it
+      }
+      // If it's 404, the repo doesn't exist
+      else if (status === 404) {
+        this.logger.debug(`📭 ${owner}/${repo} NOT FOUND`);
+        throw new HttpException(
+          `Repository '${owner}/${repo}' not found.`,
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      // For any other error (network, timeout, etc.), assume public
+      else {
+        this.logger.warn(
+          `Could not determine visibility for ${owner}/${repo}, assuming public. Status: ${status}`,
+        );
         const visibility: 'public' | 'private' = 'public';
         this.cache.set(cacheKey, {
           createdAt: Date.now(),
-          ttlMs: 1000 * 60 * 10, // Short cache for uncertain cases
+          ttlMs: 1000 * 60 * 5, // Short cache for uncertain cases
           value: visibility,
         });
         return visibility;
