@@ -141,31 +141,19 @@ export class RepoHealthService {
       return cached.value;
     }
 
-    // HARDCODE KNOWN PUBLIC REPOS TO FIX THE BUG
-    const knownPublicRepos = [
-      'Seunfola/worksphere',
-      'Seunfola/my-portfolio',
-      // Add other known public repos here
-    ];
-
-    const repoKey = `${owner}/${repo}`;
-    if (knownPublicRepos.includes(repoKey)) {
-      this.logger.log(`Hardcoded ${repoKey} as PUBLIC (known public repo)`);
-      const visibility: 'public' | 'private' = 'public';
-      this.cache.set(cacheKey, {
-        createdAt: Date.now(),
-        ttlMs: 1000 * 60 * 60,
-        value: visibility,
-      });
-      return visibility;
-    }
-
     try {
+      // Try to access without token
       const headers = this.buildHeaders();
       const url = `https://api.github.com/repos/${owner}/${repo}`;
 
-      const res = await lastValueFrom(this.httpService.get(url, { headers }));
+      const res = await lastValueFrom(
+        this.httpService.get(url, {
+          headers,
+          timeout: 10000, // 10 second timeout
+        }),
+      );
 
+      // If we get here, it's public
       const visibility: 'public' | 'private' = 'public';
       this.cache.set(cacheKey, {
         createdAt: Date.now(),
@@ -176,6 +164,8 @@ export class RepoHealthService {
     } catch (err: any) {
       const status = err?.response?.status ?? 0;
 
+      // Only consider it private if we get explicit 401/403
+      // For all other errors (timeouts, network issues, etc.), assume public
       if (status === 401 || status === 403) {
         const visibility: 'public' | 'private' = 'private';
         this.cache.set(cacheKey, {
@@ -184,20 +174,12 @@ export class RepoHealthService {
           value: visibility,
         });
         return visibility;
-      } else if (status === 404) {
-        throw new HttpException(
-          `Repository '${owner}/${repo}' not found.`,
-          HttpStatus.NOT_FOUND,
-        );
       } else {
-        // For any other error, assume public and try to proceed
-        this.logger.warn(
-          `Assuming ${owner}/${repo} is PUBLIC due to error: ${status}`,
-        );
+        // For 404, network errors, timeouts, etc. - assume public and let the main fetch handle it
         const visibility: 'public' | 'private' = 'public';
         this.cache.set(cacheKey, {
           createdAt: Date.now(),
-          ttlMs: 1000 * 60 * 5,
+          ttlMs: 1000 * 60 * 10, // Short cache for uncertain cases
           value: visibility,
         });
         return visibility;
