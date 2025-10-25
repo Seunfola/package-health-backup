@@ -126,6 +126,135 @@ export class RepoHealthService {
     return headers;
   }
 
+  /**
+   * Check if a repository is public by attempting to access it without authentication
+   */
+  private async isRepoPublic(owner: string, repo: string): Promise<boolean> {
+    const cacheKey = `public:${owner}/${repo}`;
+    const cached = this.cache.get(cacheKey) as CacheEntry<boolean> | undefined;
+
+    if (cached && Date.now() - cached.createdAt < cached.ttlMs) {
+      return cached.value;
+    }
+
+    try {
+      const headers = this.buildHeaders(); // No token
+      const url = `https://api.github.com/repos/${owner}/${repo}`;
+
+      const res = await lastValueFrom(this.httpService.get(url, { headers }));
+
+      // If we can access it without token, it's public
+      const isPublic = res.status === 200;
+      this.cache.set(cacheKey, {
+        createdAt: Date.now(),
+        ttlMs: 1000 * 60 * 60, // Cache for 1 hour
+        value: isPublic,
+      });
+
+      return isPublic;
+    } catch (err: any) {
+      const status = err?.response?.status ?? 0;
+
+      // If we get 401/403 without token, it's private
+      // If we get 404, the repo doesn't exist
+      const isPrivate = status === 401 || status === 403;
+
+      this.cache.set(cacheKey, {
+        createdAt: Date.now(),
+        ttlMs: 1000 * 60 * 30, // Cache for 30 minutes
+        value: !isPrivate, // If not private error, assume public or doesn't exist
+      });
+
+      return !isPrivate;
+    }
+  }
+
+  /**
+   * Fetch repository data with smart token handling
+   */
+  private async fetchRepoWithTokenHandling(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<GitHubRepoResponse> {
+    const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
+
+    // First, check if the repo is public
+    const isPublic = await this.isRepoPublic(owner, repo);
+
+    if (isPublic) {
+      // For public repos, try with token first if provided, then without
+      if (token) {
+        try {
+          const headers = this.buildHeaders(token);
+          const res = await lastValueFrom(
+            this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
+          );
+          return res.data;
+        } catch (err: any) {
+          // If token fails for public repo, just try without token
+          this.logger.debug(
+            `Token failed for public repo ${owner}/${repo}, trying without token`,
+          );
+        }
+      }
+
+      // Try without token for public repos
+      try {
+        const headers = this.buildHeaders(); // No token
+        const res = await lastValueFrom(
+          this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
+        );
+        return res.data;
+      } catch (err: any) {
+        const status = err?.response?.status ?? 0;
+        if (status === 404) {
+          throw new HttpException(
+            `Repository '${owner}/${repo}' not found.`,
+            HttpStatus.NOT_FOUND,
+          );
+        }
+        throw new HttpException(
+          `Failed to fetch repository '${owner}/${repo}'.`,
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
+    } else {
+      // For private repos, we need a valid token
+      if (!token) {
+        throw new HttpException(
+          `Repository '${owner}/${repo}' is private and requires a GitHub token.`,
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      try {
+        const headers = this.buildHeaders(token);
+        const res = await lastValueFrom(
+          this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
+        );
+        return res.data;
+      } catch (err: any) {
+        const status = err?.response?.status ?? 0;
+        if (status === 401 || status === 403) {
+          throw new HttpException(
+            'Invalid or expired GitHub token provided for private repository.',
+            HttpStatus.BAD_REQUEST,
+          );
+        } else if (status === 404) {
+          throw new HttpException(
+            `Repository '${owner}/${repo}' not found.`,
+            HttpStatus.NOT_FOUND,
+          );
+        }
+        throw new HttpException(
+          `Failed to fetch private repository '${owner}/${repo}'.`,
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
+    }
+  }
+
   private detectDocker(): boolean {
     if (this._dockerAvailable !== null) return this._dockerAvailable;
 
@@ -149,7 +278,8 @@ export class RepoHealthService {
     repo: string,
   ): Promise<RepoHealthDocument | null> {
     try {
-      return await this.repoHealthModel.findOne({ owner, repo }).exec();
+      const record = await this.repoHealthModel.findOne({ owner, repo }).exec();
+      return record;
     } catch (error) {
       this.logger.error(`Failed to find repository ${owner}/${repo}:`, error);
       throw new HttpException(
@@ -176,11 +306,13 @@ export class RepoHealthService {
         mongoQuery['overall_health.score'] = { $gte: minHealthScore };
       }
 
-      return await this.repoHealthModel
+      const records = await this.repoHealthModel
         .find(mongoQuery)
         .skip(offset)
         .limit(limit)
         .exec();
+
+      return records;
     } catch (error) {
       this.logger.error('Failed to find repositories:', error);
       throw new HttpException(
@@ -263,10 +395,10 @@ export class RepoHealthService {
     const repoKey = `repo:${owner}/${repo}`;
 
     try {
-      // Always try to get repo data first - this is the most critical
+      // Use the new smart repository fetching
       const repoData = await this.requestWithCache<GitHubRepoResponse>(
         repoKey,
-        () => this.fetchRepo(owner, repo, token),
+        () => this.fetchRepoWithTokenHandling(owner, repo, token),
         1000 * 60 * 5,
       );
 
@@ -561,69 +693,7 @@ export class RepoHealthService {
     repo: string,
     token?: string,
   ): Promise<GitHubRepoResponse> {
-    const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
-
-    // Strategy: Try with token first if provided, then fallback to no token
-    if (token) {
-      try {
-        const headers = this.buildHeaders(token);
-        const res = await lastValueFrom(
-          this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
-        );
-        return res.data;
-      } catch (err: any) {
-        const status = err?.response?.status ?? 0;
-
-        // If token is invalid/expired, just try without token for public repos
-        if (status === 401 || status === 403) {
-          this.logger.debug(
-            `Token invalid for ${owner}/${repo}, trying without token`,
-          );
-          // Continue to try without token below
-        } else if (status === 404) {
-          throw new HttpException(
-            `Repository '${owner}/${repo}' not found.`,
-            HttpStatus.NOT_FOUND,
-          );
-        } else {
-          this.logger.debug(
-            `Unexpected error with token for ${owner}/${repo}:`,
-            err.message,
-          );
-          // Continue to try without token below
-        }
-      }
-    }
-
-    // Try without token (for public repos)
-    try {
-      const headers = this.buildHeaders(); // No token
-      const res = await lastValueFrom(
-        this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
-      );
-      return res.data;
-    } catch (err: any) {
-      const status = err?.response?.status ?? 0;
-
-      if (status === 404) {
-        throw new HttpException(
-          `Repository '${owner}/${repo}' not found.`,
-          HttpStatus.NOT_FOUND,
-        );
-      } else if (status === 401 || status === 403) {
-        // This means it's a private repo and we need a valid token
-        throw new HttpException(
-          `Repository '${owner}/${repo}' is private and requires a valid GitHub token.`,
-          HttpStatus.BAD_REQUEST,
-        );
-      } else {
-        this.logger.error(`Failed to fetch repo ${owner}/${repo}:`, err);
-        throw new HttpException(
-          `Failed to fetch repository '${owner}/${repo}'.`,
-          HttpStatus.INTERNAL_SERVER_ERROR,
-        );
-      }
-    }
+    return this.fetchRepoWithTokenHandling(owner, repo, token);
   }
 
   private async fetchCommitActivity(
