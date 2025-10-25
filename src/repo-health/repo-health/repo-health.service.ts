@@ -147,10 +147,11 @@ export class RepoHealthService {
 
       const res = await lastValueFrom(this.httpService.get(url, { headers }));
 
+      // If we can access it without token, it's definitely public
       const visibility: 'public' | 'private' = 'public';
       this.cache.set(cacheKey, {
         createdAt: Date.now(),
-        ttlMs: 1000 * 60 * 60,
+        ttlMs: 1000 * 60 * 60, // Cache for 1 hour
         value: visibility,
       });
 
@@ -163,7 +164,7 @@ export class RepoHealthService {
         const visibility: 'public' | 'private' = 'private';
         this.cache.set(cacheKey, {
           createdAt: Date.now(),
-          ttlMs: 1000 * 60 * 30,
+          ttlMs: 1000 * 60 * 30, // Cache for 30 minutes
           value: visibility,
         });
         return visibility;
@@ -173,10 +174,17 @@ export class RepoHealthService {
           HttpStatus.NOT_FOUND,
         );
       } else {
-        throw new HttpException(
-          `Failed to determine visibility for repository '${owner}/${repo}'.`,
-          HttpStatus.INTERNAL_SERVER_ERROR,
+        // For network errors, timeouts, etc., assume public and try to proceed
+        this.logger.warn(
+          `Could not determine visibility for ${owner}/${repo}, assuming public. Status: ${status}`,
         );
+        const visibility: 'public' | 'private' = 'public';
+        this.cache.set(cacheKey, {
+          createdAt: Date.now(),
+          ttlMs: 1000 * 60 * 5, // Short cache for uncertain cases
+          value: visibility,
+        });
+        return visibility;
       }
     }
   }
@@ -1007,5 +1015,81 @@ export class RepoHealthService {
     if (rawJson) return this._getDependenciesFromJson(rawJson);
     if (file) return this._getDependenciesFromFile(file);
     return {};
+  }
+
+  /**
+   * DEBUG METHOD: Check what's happening with repository visibility
+   */
+  async debugRepoVisibility(url: string, token?: string): Promise<any> {
+    try {
+      const { owner, repo } = this.parseGitHubUrl(url);
+
+      // Test 1: Try without token
+      let withoutTokenStatus: number = 0;
+      let withoutTokenSuccess: boolean = false;
+      try {
+        const headers = this.buildHeaders(); // No token
+        const testUrl = `https://api.github.com/repos/${owner}/${repo}`;
+        const res = await lastValueFrom(
+          this.httpService.get(testUrl, { headers }),
+        );
+        withoutTokenStatus = res.status;
+        withoutTokenSuccess = true;
+      } catch (err: any) {
+        withoutTokenStatus = err?.response?.status ?? 0;
+        withoutTokenSuccess = false;
+      }
+
+      // Test 2: Try with token if provided
+      let withTokenStatus: number = 0;
+      let withTokenSuccess: boolean = false;
+      let withTokenTested: boolean = false;
+
+      if (token) {
+        withTokenTested = true;
+        try {
+          const headers = this.buildHeaders(token);
+          const testUrl = `https://api.github.com/repos/${owner}/${repo}`;
+          const res = await lastValueFrom(
+            this.httpService.get(testUrl, { headers }),
+          );
+          withTokenStatus = res.status;
+          withTokenSuccess = true;
+        } catch (err: any) {
+          withTokenStatus = err?.response?.status ?? 0;
+          withTokenSuccess = false;
+        }
+      }
+
+      const determinedVisibility = await this.determineRepoVisibility(
+        owner,
+        repo,
+      );
+
+      return {
+        repository: `${owner}/${repo}`,
+        tests: {
+          withoutToken: {
+            success: withoutTokenSuccess,
+            status: withoutTokenStatus,
+            accessible: withoutTokenSuccess,
+          },
+          withToken: withTokenTested
+            ? {
+                success: withTokenSuccess,
+                status: withTokenStatus,
+                accessible: withTokenSuccess,
+              }
+            : 'No token provided',
+        },
+        determinedVisibility,
+        conclusion: withoutTokenSuccess
+          ? 'Repository is PUBLIC (accessible without token)'
+          : 'Repository is PRIVATE (not accessible without token)',
+      };
+    } catch (error) {
+      this.logger.error(`Debug failed for ${url}:`, error);
+      throw new HttpException('Debug failed', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 }

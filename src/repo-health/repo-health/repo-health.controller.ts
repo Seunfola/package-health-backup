@@ -8,7 +8,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiConsumes, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiConsumes, ApiBody, ApiResponse } from '@nestjs/swagger';
 import { RepoHealthService } from './repo-health.service';
 
 interface UrlBody {
@@ -25,6 +25,22 @@ interface OwnerRepoBody {
 @Controller('repo-health')
 export class RepoHealthController {
   constructor(private readonly repoHealthService: RepoHealthService) {}
+
+  @Post('debug-visibility')
+  @ApiOperation({
+    summary: 'Debug repository visibility detection',
+    description:
+      'Test how the system detects if a repository is public or private',
+  })
+  @ApiResponse({ status: 200, description: 'Visibility debug information' })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid URL or repository not found',
+  })
+  @ApiResponse({ status: 500, description: 'Internal server error' })
+  async debugVisibility(@Body() body: { url: string; token?: string }) {
+    return this.repoHealthService.debugRepoVisibility(body.url, body.token);
+  }
 
   @Post('analyze-url')
   @ApiOperation({
@@ -63,11 +79,12 @@ export class RepoHealthController {
       if (err instanceof HttpException) {
         throw err;
       }
-      const message = err instanceof Error ? err.message : 'Unexpected error occurred';
+      const message =
+        err instanceof Error ? err.message : 'Unexpected error occurred';
       throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
-  
+
   @Post('analyze-package/upload')
   @UseInterceptors(FileInterceptor('file'))
   @ApiOperation({
