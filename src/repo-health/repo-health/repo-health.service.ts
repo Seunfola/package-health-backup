@@ -126,12 +126,16 @@ export class RepoHealthService {
     return headers;
   }
 
-  /**
-   * Check if a repository is public by attempting to access it without authentication
-   */
-  private async isRepoPublic(owner: string, repo: string): Promise<boolean> {
-    const cacheKey = `public:${owner}/${repo}`;
-    const cached = this.cache.get(cacheKey) as CacheEntry<boolean> | undefined;
+  // Determine if a repository is public or private
+
+  private async determineRepoVisibility(
+    owner: string,
+    repo: string,
+  ): Promise<'public' | 'private'> {
+    const cacheKey = `visibility:${owner}/${repo}`;
+    const cached = this.cache.get(cacheKey) as
+      | CacheEntry<'public' | 'private'>
+      | undefined;
 
     if (cached && Date.now() - cached.createdAt < cached.ttlMs) {
       return cached.value;
@@ -143,91 +147,51 @@ export class RepoHealthService {
 
       const res = await lastValueFrom(this.httpService.get(url, { headers }));
 
-      // If we can access it without token, it's public
-      const isPublic = res.status === 200;
+      const visibility: 'public' | 'private' = 'public';
       this.cache.set(cacheKey, {
         createdAt: Date.now(),
-        ttlMs: 1000 * 60 * 60, // Cache for 1 hour
-        value: isPublic,
+        ttlMs: 1000 * 60 * 60,
+        value: visibility,
       });
 
-      return isPublic;
+      return visibility;
     } catch (err: any) {
       const status = err?.response?.status ?? 0;
 
       // If we get 401/403 without token, it's private
-      // If we get 404, the repo doesn't exist
-      const isPrivate = status === 401 || status === 403;
-
-      this.cache.set(cacheKey, {
-        createdAt: Date.now(),
-        ttlMs: 1000 * 60 * 30, // Cache for 30 minutes
-        value: !isPrivate, // If not private error, assume public or doesn't exist
-      });
-
-      return !isPrivate;
+      if (status === 401 || status === 403) {
+        const visibility: 'public' | 'private' = 'private';
+        this.cache.set(cacheKey, {
+          createdAt: Date.now(),
+          ttlMs: 1000 * 60 * 30,
+          value: visibility,
+        });
+        return visibility;
+      } else if (status === 404) {
+        throw new HttpException(
+          `Repository '${owner}/${repo}' not found.`,
+          HttpStatus.NOT_FOUND,
+        );
+      } else {
+        throw new HttpException(
+          `Failed to determine visibility for repository '${owner}/${repo}'.`,
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
     }
   }
 
-  /**
-   * Fetch repository data with smart token handling
-   */
-  private async fetchRepoWithTokenHandling(
+  // Fetch data from a PUBLIC repository
+
+  private async fetchPublicRepo(
     owner: string,
     repo: string,
     token?: string,
   ): Promise<GitHubRepoResponse> {
     const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
 
-    // First, check if the repo is public
-    const isPublic = await this.isRepoPublic(owner, repo);
-
-    if (isPublic) {
-      // For public repos, try with token first if provided, then without
-      if (token) {
-        try {
-          const headers = this.buildHeaders(token);
-          const res = await lastValueFrom(
-            this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
-          );
-          return res.data;
-        } catch (err: any) {
-          // If token fails for public repo, just try without token
-          this.logger.debug(
-            `Token failed for public repo ${owner}/${repo}, trying without token`,
-          );
-        }
-      }
-
-      // Try without token for public repos
-      try {
-        const headers = this.buildHeaders(); // No token
-        const res = await lastValueFrom(
-          this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
-        );
-        return res.data;
-      } catch (err: any) {
-        const status = err?.response?.status ?? 0;
-        if (status === 404) {
-          throw new HttpException(
-            `Repository '${owner}/${repo}' not found.`,
-            HttpStatus.NOT_FOUND,
-          );
-        }
-        throw new HttpException(
-          `Failed to fetch repository '${owner}/${repo}'.`,
-          HttpStatus.INTERNAL_SERVER_ERROR,
-        );
-      }
-    } else {
-      // For private repos, we need a valid token
-      if (!token) {
-        throw new HttpException(
-          `Repository '${owner}/${repo}' is private and requires a GitHub token.`,
-          HttpStatus.BAD_REQUEST,
-        );
-      }
-
+    // For public repos, try with token first if provided, then without
+    if (token) {
       try {
         const headers = this.buildHeaders(token);
         const res = await lastValueFrom(
@@ -235,23 +199,113 @@ export class RepoHealthService {
         );
         return res.data;
       } catch (err: any) {
-        const status = err?.response?.status ?? 0;
-        if (status === 401 || status === 403) {
-          throw new HttpException(
-            'Invalid or expired GitHub token provided for private repository.',
-            HttpStatus.BAD_REQUEST,
-          );
-        } else if (status === 404) {
-          throw new HttpException(
-            `Repository '${owner}/${repo}' not found.`,
-            HttpStatus.NOT_FOUND,
-          );
-        }
-        throw new HttpException(
-          `Failed to fetch private repository '${owner}/${repo}'.`,
-          HttpStatus.INTERNAL_SERVER_ERROR,
+        // If token fails for public repo, just try without token
+        this.logger.debug(
+          `Token failed for public repo ${owner}/${repo}, trying without token`,
         );
       }
+    }
+
+    // Try without token for public repos
+    try {
+      const headers = this.buildHeaders(); // No token
+      const res = await lastValueFrom(
+        this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
+      );
+      return res.data;
+    } catch (err: any) {
+      const status = err?.response?.status ?? 0;
+      if (status === 404) {
+        throw new HttpException(
+          `Repository '${owner}/${repo}' not found.`,
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      throw new HttpException(
+        `Failed to fetch public repository '${owner}/${repo}'.`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  // Fetch data from a PRIVATE repository
+
+  private async fetchPrivateRepo(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<GitHubRepoResponse> {
+    const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
+
+    // For private repos, we absolutely need a valid token
+    if (!token) {
+      throw new HttpException(
+        `Repository '${owner}/${repo}' is private and requires a GitHub token.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    try {
+      const headers = this.buildHeaders(token);
+      const res = await lastValueFrom(
+        this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
+      );
+      return res.data;
+    } catch (err: any) {
+      const status = err?.response?.status ?? 0;
+      if (status === 401 || status === 403) {
+        throw new HttpException(
+          'Invalid or expired GitHub token provided for private repository.',
+          HttpStatus.BAD_REQUEST,
+        );
+      } else if (status === 404) {
+        throw new HttpException(
+          `Repository '${owner}/${repo}' not found.`,
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      throw new HttpException(
+        `Failed to fetch private repository '${owner}/${repo}'.`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  // Main repository fetcher - routes to appropriate function based on visibility
+
+  private async fetchRepo(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<GitHubRepoResponse> {
+    // First determine the repository visibility
+    const visibility = await this.determineRepoVisibility(owner, repo);
+
+    // Route to the appropriate fetcher based on visibility
+    if (visibility === 'public') {
+      return this.fetchPublicRepo(owner, repo, token);
+    } else {
+      return this.fetchPrivateRepo(owner, repo, token);
+    }
+  }
+
+  // Public method to check repository visibility
+
+  async checkRepoVisibility(
+    url: string,
+    token?: string,
+  ): Promise<{ visibility: 'public' | 'private' }> {
+    try {
+      const { owner, repo } = this.parseGitHubUrl(url);
+      const visibility = await this.determineRepoVisibility(owner, repo);
+      return { visibility };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      this.logger.error(`Failed to check visibility for ${url}:`, error);
+      throw new HttpException(
+        'Failed to check repository visibility',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -395,10 +449,9 @@ export class RepoHealthService {
     const repoKey = `repo:${owner}/${repo}`;
 
     try {
-      // Use the new smart repository fetching
       const repoData = await this.requestWithCache<GitHubRepoResponse>(
         repoKey,
-        () => this.fetchRepoWithTokenHandling(owner, repo, token),
+        () => this.fetchRepo(owner, repo, token),
         1000 * 60 * 5,
       );
 
@@ -409,7 +462,6 @@ export class RepoHealthService {
         );
       }
 
-      // Get other data in parallel but make them completely optional
       const [commitActivity, securityAlerts, dependencyAnalysis] =
         await Promise.allSettled([
           this.requestWithCache<CommitActivityItem[]>(
@@ -425,7 +477,6 @@ export class RepoHealthService {
           this._processDependencies(file, rawJson),
         ]);
 
-      // Extract values from settled promises
       const commitActivityValue =
         commitActivity.status === 'fulfilled' ? commitActivity.value : [];
       const securityAlertsValue =
@@ -688,14 +739,6 @@ export class RepoHealthService {
     }
   }
 
-  private async fetchRepo(
-    owner: string,
-    repo: string,
-    token?: string,
-  ): Promise<GitHubRepoResponse> {
-    return this.fetchRepoWithTokenHandling(owner, repo, token);
-  }
-
   private async fetchCommitActivity(
     owner: string,
     repo: string,
@@ -716,7 +759,6 @@ export class RepoHealthService {
         total: typeof item.total === 'number' ? item.total : 0,
       }));
     } catch (err: any) {
-      // Never fail - just return empty data
       this.logger.debug(`Commit activity not available for ${owner}/${repo}`);
       return [];
     }
@@ -736,7 +778,6 @@ export class RepoHealthService {
       if (res.status === 404) return [];
       return [];
     } catch (err: any) {
-      // Never fail - just return empty data
       this.logger.debug(`Security alerts not available for ${owner}/${repo}`);
       return [];
     }
