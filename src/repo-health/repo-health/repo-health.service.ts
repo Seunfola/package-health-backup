@@ -562,9 +562,42 @@ export class RepoHealthService {
     token?: string,
   ): Promise<GitHubRepoResponse> {
     const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
-    const headers = this.buildHeaders(token);
 
+    // Strategy: Try with token first if provided, then fallback to no token
+    if (token) {
+      try {
+        const headers = this.buildHeaders(token);
+        const res = await lastValueFrom(
+          this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
+        );
+        return res.data;
+      } catch (err: any) {
+        const status = err?.response?.status ?? 0;
+
+        // If token is invalid/expired, just try without token for public repos
+        if (status === 401 || status === 403) {
+          this.logger.debug(
+            `Token invalid for ${owner}/${repo}, trying without token`,
+          );
+          // Continue to try without token below
+        } else if (status === 404) {
+          throw new HttpException(
+            `Repository '${owner}/${repo}' not found.`,
+            HttpStatus.NOT_FOUND,
+          );
+        } else {
+          this.logger.debug(
+            `Unexpected error with token for ${owner}/${repo}:`,
+            err.message,
+          );
+          // Continue to try without token below
+        }
+      }
+    }
+
+    // Try without token (for public repos)
     try {
+      const headers = this.buildHeaders(); // No token
       const res = await lastValueFrom(
         this.httpService.get<GitHubRepoResponse>(baseUrl, { headers }),
       );
@@ -572,44 +605,16 @@ export class RepoHealthService {
     } catch (err: any) {
       const status = err?.response?.status ?? 0;
 
-      // For public repos, we should never fail due to missing token
-      if (status === 401 || status === 403) {
-        // If we have a token and it's invalid, throw specific error
-        if (token) {
-          throw new HttpException(
-            'Invalid or expired GitHub token provided.',
-            HttpStatus.BAD_REQUEST,
-          );
-        }
-        // If no token, try without authentication (for public repos)
-        try {
-          const publicRes = await lastValueFrom(
-            this.httpService.get<GitHubRepoResponse>(baseUrl, {
-              headers: this.buildHeaders(), // No token
-            }),
-          );
-          return publicRes.data;
-        } catch (publicErr: any) {
-          const publicStatus = publicErr?.response?.status ?? 0;
-          if (publicStatus === 404) {
-            throw new HttpException(
-              `Repository '${owner}/${repo}' not found.`,
-              HttpStatus.NOT_FOUND,
-            );
-          }
-          this.logger.error(
-            `Failed to fetch public repo ${owner}/${repo}:`,
-            publicErr,
-          );
-          throw new HttpException(
-            `Failed to fetch repository '${owner}/${repo}'.`,
-            HttpStatus.INTERNAL_SERVER_ERROR,
-          );
-        }
-      } else if (status === 404) {
+      if (status === 404) {
         throw new HttpException(
           `Repository '${owner}/${repo}' not found.`,
           HttpStatus.NOT_FOUND,
+        );
+      } else if (status === 401 || status === 403) {
+        // This means it's a private repo and we need a valid token
+        throw new HttpException(
+          `Repository '${owner}/${repo}' is private and requires a valid GitHub token.`,
+          HttpStatus.BAD_REQUEST,
         );
       } else {
         this.logger.error(`Failed to fetch repo ${owner}/${repo}:`, err);
@@ -641,21 +646,9 @@ export class RepoHealthService {
         total: typeof item.total === 'number' ? item.total : 0,
       }));
     } catch (err: any) {
-      const status = err?.response?.status ?? 0;
-
-      // For public repos, don't fail - just return empty data
-      if (status === 401 || status === 403 || status === 404) {
-        this.logger.debug(
-          `Commit activity not available for ${owner}/${repo}, status: ${status}`,
-        );
-        return [];
-      }
-
-      this.logger.debug(
-        `Failed to fetch commit activity for ${owner}/${repo}:`,
-        err.message,
-      );
-      return []; // Never fail for public repos
+      // Never fail - just return empty data
+      this.logger.debug(`Commit activity not available for ${owner}/${repo}`);
+      return [];
     }
   }
 
@@ -673,14 +666,9 @@ export class RepoHealthService {
       if (res.status === 404) return [];
       return [];
     } catch (err: any) {
-      const status = err?.response?.status ?? 0;
-
-      // Security alerts often require specific permissions or may not be available
-      // For any error, just return empty array and don't fail the analysis
-      this.logger.debug(
-        `Security alerts not available for ${owner}/${repo}, status: ${status}`,
-      );
-      return []; // Never fail for any reason
+      // Never fail - just return empty data
+      this.logger.debug(`Security alerts not available for ${owner}/${repo}`);
+      return [];
     }
   }
 
@@ -899,5 +887,14 @@ export class RepoHealthService {
             : 'Poor';
 
     return { score, label };
+  }
+
+  private _getDependencies(
+    file?: Express.Multer.File,
+    rawJson?: string | Record<string, unknown>,
+  ): Record<string, string> {
+    if (rawJson) return this._getDependenciesFromJson(rawJson);
+    if (file) return this._getDependenciesFromFile(file);
+    return {};
   }
 }
