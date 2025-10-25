@@ -773,19 +773,51 @@ export class RepoHealthService {
     try {
       const headers = this.buildHeaders(token);
       const url = `https://api.github.com/repos/${owner}/${repo}/stats/commit_activity`;
+
+      this.logger.debug(`🔍 Fetching commit activity from: ${url}`);
+
       const res = await lastValueFrom(
         this.httpService.get<unknown>(url, { headers }),
       );
 
-      if (res.status === 202) return [];
+      this.logger.debug(`📊 Commit activity response status: ${res.status}`);
+      this.logger.debug(`📊 Commit activity data type: ${typeof res.data}`);
+      this.logger.debug(
+        `📊 Commit activity data: ${JSON.stringify(res.data).substring(0, 200)}...`,
+      );
+
+      if (res.status === 202) {
+        this.logger.debug(
+          '⏳ GitHub is computing commit activity (status 202)',
+        );
+        return [];
+      }
+
       const data = res.data;
-      if (!Array.isArray(data)) return [];
-      return data.map((item: any) => ({
+      if (!Array.isArray(data)) {
+        this.logger.debug(
+          `❌ Commit activity data is not an array: ${typeof data}`,
+        );
+        return [];
+      }
+
+      this.logger.debug(`✅ Found ${data.length} weeks of commit activity`);
+      const result = data.map((item: any) => ({
         week: typeof item.week === 'number' ? item.week : 0,
         total: typeof item.total === 'number' ? item.total : 0,
       }));
+
+      return result;
     } catch (err: any) {
-      this.logger.debug(`Commit activity not available for ${owner}/${repo}`);
+      const status = err?.response?.status ?? 0;
+      const errorMessage = err?.response?.data?.message || err.message;
+
+      this.logger.error(
+        `❌ Failed to fetch commit activity for ${owner}/${repo}:`,
+      );
+      this.logger.error(`   Status: ${status}`);
+      this.logger.error(`   Message: ${errorMessage}`);
+
       return [];
     }
   }
@@ -798,13 +830,38 @@ export class RepoHealthService {
     try {
       const headers = this.buildHeaders(token);
       const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
+
+      this.logger.debug(`Fetching security alerts from: ${url}`);
+
       const res = await lastValueFrom(this.httpService.get(url, { headers }));
 
-      if (res.status === 204) return [true];
-      if (res.status === 404) return [];
-      return [];
+      this.logger.debug(`Security alerts response status: ${res.status}`);
+
+      if (res.status === 204) {
+        this.logger.debug(
+          'Security alerts enabled but no vulnerabilities found',
+        );
+        return [true];
+      }
+      if (res.status === 404) {
+        this.logger.debug('Security alerts not enabled for this repository');
+        return [];
+      }
+
+      this.logger.debug(
+        `Security alerts data: ${JSON.stringify(res.data).substring(0, 200)}...`,
+      );
+      return res.data || [];
     } catch (err: any) {
-      this.logger.debug(`Security alerts not available for ${owner}/${repo}`);
+      const status = err?.response?.status ?? 0;
+      const errorMessage = err?.response?.data?.message || err.message;
+
+      this.logger.error(
+        `Failed to fetch security alerts for ${owner}/${repo}:`,
+      );
+      this.logger.error(`   Status: ${status}`);
+      this.logger.error(`   Message: ${errorMessage}`);
+
       return [];
     }
   }
