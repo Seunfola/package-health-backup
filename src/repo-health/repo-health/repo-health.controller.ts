@@ -28,18 +28,35 @@ export class RepoHealthController {
 
   @Post('debug-visibility')
   @ApiOperation({
-    summary: 'Debug repository visibility detection',
+    summary: 'Analyze repository health',
     description:
-      'Test how the system detects if a repository is public or private',
+      'Analyze the health of a GitHub repository (works for both public and private repos)',
   })
-  @ApiResponse({ status: 200, description: 'Visibility debug information' })
+  @ApiResponse({
+    status: 200,
+    description: 'Repository analysis completed successfully',
+  })
   @ApiResponse({
     status: 400,
-    description: 'Invalid URL or repository not found',
+    description: 'Invalid input or repository not found',
   })
   @ApiResponse({ status: 500, description: 'Internal server error' })
-  async debugVisibility(@Body() body: { url: string; token?: string }) {
-    return this.repoHealthService.debugRepoVisibility(body.url, body.token);
+  async analyzeRepo(
+    @Body()
+    body: {
+      owner: string;
+      repo: string;
+      token?: string;
+      rawJson?: string | Record<string, unknown>;
+    },
+  ) {
+    return this.repoHealthService.analyzeRepo(
+      body.owner,
+      body.repo,
+      undefined, // file
+      body.rawJson,
+      body.token,
+    );
   }
 
   @Post('analyze-url')
