@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, FilterQuery } from 'mongoose';
-import { RepoHealthService } from 'src/repo-health/repo-health/repo-health.service';
 import {
   NotificationSummary as INotificationSummary,
   NotificationQueryParams,
@@ -30,6 +29,7 @@ import {
 import { UserPreferencesService } from 'src/preference/preferences.service';
 import { UserPreferences } from 'src/preference/preferences.interface';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { RepoHealthService } from 'src/repo-health/services/repo-health.service';
 
 @Injectable()
 export class NotificationService {

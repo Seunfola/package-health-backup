@@ -16,6 +16,31 @@ export class RepoHealthService {
     private readonly repositoryDataService: RepositoryDataService,
   ) {}
 
+  async findRepoHealth(
+    owner: string,
+    repo: string,
+  ): Promise<RepoHealthDocument> {
+    try {
+      const record = await this.repositoryDataService
+        .findOne(`${owner}/${repo}`);
+
+      if (!record) {
+        throw new HttpException(
+          `No analysis found for ${owner}/${repo}`,
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      return record;
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        'Failed to retrieve repository health',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
   async analyzePublicRepository(
     owner: string,
     repo: string,
