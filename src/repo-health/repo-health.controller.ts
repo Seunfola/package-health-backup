@@ -9,6 +9,7 @@ import {
   Get,
   Param,
   Query,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -332,11 +333,11 @@ export class RepoHealthController {
   @ApiQuery({ name: 'limit', required: false, description: 'Items per page' })
   async searchRepos(
     @Query('owner') owner?: string,
-    @Query('page') page: number = 1,
-    @Query('limit') limit: number = 10,
+    @Query('page', new ParseIntPipe({ optional: true })) page: number = 1,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit: number = 10,
   ) {
     try {
-      return await this.repoHealthService.findAll(page, limit);
+      return await this.repoHealthService.findAll(page, limit, owner);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'Failed to search repositories';

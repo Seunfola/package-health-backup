@@ -1,13 +1,14 @@
-// repo-health.dto.ts
 import { ApiProperty } from '@nestjs/swagger';
 
-// Remove AnalyzeRepoDto and AnalyzePrivateRepoDto since they're no longer used
+import { IsString, IsNotEmpty, IsUrl, IsOptional } from 'class-validator';
 
 export class AnalyzeAutoRepoDto {
   @ApiProperty({
     example: 'https://github.com/nestjs/nest',
     description: 'GitHub repository URL',
   })
+  @IsUrl()
+  @IsNotEmpty()
   url!: string;
 
   @ApiProperty({
@@ -15,6 +16,8 @@ export class AnalyzeAutoRepoDto {
     example: 'ghp_xxx',
     description: 'GitHub token (required only if repository is private)',
   })
+  @IsString()
+  @IsOptional()
   token?: string;
 }
 
