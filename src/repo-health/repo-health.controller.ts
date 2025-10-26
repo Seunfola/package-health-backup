@@ -123,7 +123,15 @@ export class RepoHealthController {
     }
 
     try {
-      const rawJson = JSON.parse(packageJson);
+      let rawJson;
+      try {
+        rawJson = JSON.parse(packageJson);
+      } catch (parseErr) {
+        throw new HttpException(
+          'Invalid JSON format in package.json content',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
       return await this.repoHealthService.analyzePublicRepoByUrl(
         url,
         undefined,

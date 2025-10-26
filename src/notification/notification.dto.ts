@@ -326,6 +326,7 @@ export class BulkOperationResponseDto {
 export class BulkUpdateNotificationsDto {
   @ApiProperty({ type: [String], description: 'Notification IDs to update' })
   @ArrayMinSize(1, { message: 'At least one notification ID is required' })
+  @IsArray()
   @IsString({ each: true })
   @IsNotEmpty({ each: true })
   ids!: string[];
