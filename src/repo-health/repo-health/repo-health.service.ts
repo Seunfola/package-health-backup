@@ -1102,7 +1102,7 @@ export class RepoHealthService {
       let withoutTokenStatus: number = 0;
       let withoutTokenSuccess: boolean = false;
       try {
-        const headers = this.buildHeaders(); // No token
+        const headers = this.buildHeaders();
         const testUrl = `https://api.github.com/repos/${owner}/${repo}`;
         const res = await lastValueFrom(
           this.httpService.get(testUrl, { headers }),

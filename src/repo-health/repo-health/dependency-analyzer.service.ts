@@ -55,7 +55,6 @@ export class DependencyAnalyzerService {
     );
     const unstable = this.detectUnstableDeps(deps);
 
-    //  NO CLEANUP = SIMPLE!
     return {
       score,
       health,
@@ -160,7 +159,6 @@ export class DependencyAnalyzerService {
     return result;
   }
 
-  // FIXED: NO ESLINT ERRORS!
   private extractOutdated(
     npmData: Record<
       string,
@@ -184,6 +182,7 @@ export class DependencyAnalyzerService {
 
     return list;
   }
+
   private calculateHealthScore(
     vulnerabilities: Record<string, any>,
     outdated: any[],
@@ -237,7 +236,7 @@ export class DependencyAnalyzerService {
     return Math.round(sizes.reduce((a, b) => a + b, 0));
   }
 
-  // REAL LICENSE RISKS (0ms!) - NO CHANGE!
+  // REAL LICENSE RISKS (0ms!)
   private getRealLicenseRisks(npmData: Record<string, any>) {
     const risks: string[] = [];
     Object.entries(npmData).forEach(([name, data]) => {
@@ -257,7 +256,7 @@ export class DependencyAnalyzerService {
     return risks;
   }
 
-  // REAL POPULARITY (100ms!) - NO 0!
+  // REAL POPULARITY (100ms!)
   private async getRealPopularity(packageNames: string[]) {
     const downloads = await Promise.all(
       packageNames.map(async (name) => {
@@ -285,7 +284,7 @@ export class DependencyAnalyzerService {
     return Math.min(100, Math.round(total / 10000));
   }
 
-  // 🔥 REAL DAYS BEHIND (50ms!) - npm publish dates!
+  // REAL DAYS BEHIND (50ms!) - npm publish dates!
   private async getDaysBehind(
     outdated: { name: string; current: string; latest: string }[],
   ) {
@@ -324,7 +323,6 @@ export class DependencyAnalyzerService {
     return Math.round(daysList.reduce((a, b) => a + b, 0) / outdated.length);
   }
 
-  // FIXED: 0 ESLINT ERRORS + NO ANY!
   private async getNpmBatch(
     packageNames: string[],
   ): Promise<
@@ -346,7 +344,6 @@ export class DependencyAnalyzerService {
 
     return results.reduce(
       (acc, result, i) => {
-        // FIXED: TYPE GUARD = NO ANY!
         if (
           result.status === 'fulfilled' &&
           'data' in result.value &&
@@ -389,7 +386,6 @@ export class DependencyAnalyzerService {
     }
   }
 
-  // GITHUB → YOUR npm audit FORMAT!
   private extractVulnerabilitiesFromGitHub(
     advisories: any[],
     deps: Record<string, string>,
@@ -451,7 +447,7 @@ export class DependencyAnalyzerService {
 
         if (code === 'EBUSY' || code === 'ENOTEMPTY') {
           console.warn(
-            `⚠️ Cleanup attempt ${attempt + 1} failed for ${dir}: ${message}`,
+            `Cleanup attempt ${attempt + 1} failed for ${dir}: ${message}`,
           );
           if (attempt < 2)
             await new Promise((resolve) =>
