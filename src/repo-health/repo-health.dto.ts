@@ -6,12 +6,6 @@ export class AnalyzeRepoDto {
     description: 'GitHub repository URL',
   })
   url!: string;
-
-  @ApiProperty({
-    required: false,
-    description: 'Package.json content',
-  })
-  packageJson?: string;
 }
 
 export class AnalyzePrivateRepoDto {
@@ -26,12 +20,6 @@ export class AnalyzePrivateRepoDto {
     description: 'GitHub token (required for private repositories)',
   })
   token!: string;
-
-  @ApiProperty({
-    required: false,
-    description: 'Package.json content',
-  })
-  packageJson?: string;
 }
 
 export class AnalyzeAutoRepoDto {
@@ -47,10 +35,25 @@ export class AnalyzeAutoRepoDto {
     description: 'GitHub token (required only if repository is private)',
   })
   token?: string;
+}
+
+export class AnalyzeWithPasteJsonDto {
+  @ApiProperty({
+    example: 'https://github.com/nestjs/nest',
+    description: 'GitHub repository URL',
+  })
+  url!: string;
+
+  @ApiProperty({
+    example: '{"dependencies": {"express": "^4.18.0"}}',
+    description: 'Raw package.json content as string',
+  })
+  packageJson!: string;
 
   @ApiProperty({
     required: false,
-    description: 'Package.json content',
+    example: 'ghp_xxx',
+    description: 'GitHub token (required only if repository is private)',
   })
-  packageJson?: string;
+  token?: string;
 }
