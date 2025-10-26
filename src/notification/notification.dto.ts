@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import {
   IsString,
   IsUrl,
@@ -14,6 +14,7 @@ import {
   ValidateNested,
   IsDate,
   IsNotEmpty,
+  ArrayMinSize,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
@@ -87,9 +88,10 @@ export class CreateNotificationDto {
     default: false,
     description: 'Whether the notification has been read',
   })
+  @Transform(({ value }) => value ?? false)
   @IsBoolean()
   @IsOptional()
-  read?: boolean = false;
+  read?: boolean;
 
   @ApiPropertyOptional({
     example: { healthScore: 75, threshold: 80 },
@@ -323,7 +325,7 @@ export class BulkOperationResponseDto {
 
 export class BulkUpdateNotificationsDto {
   @ApiProperty({ type: [String], description: 'Notification IDs to update' })
-  @IsArray()
+  @ArrayMinSize(1, { message: 'At least one notification ID is required' })
   @IsString({ each: true })
   @IsNotEmpty({ each: true })
   ids!: string[];
@@ -333,31 +335,34 @@ export class BulkUpdateNotificationsDto {
   @Type(() => UpdateNotificationDto)
   updates!: UpdateNotificationDto;
 }
-
 export class BulkDeleteNotificationsDto {
   @ApiProperty({ type: [String], description: 'Notification IDs to delete' })
   @IsArray()
+  @ArrayMinSize(1, { message: 'At least one notification ID is required' })
   @IsString({ each: true })
   @IsNotEmpty({ each: true })
   ids!: string[];
 }
+
 
 export class NotificationPreferencesDto {
   @ApiPropertyOptional({
     default: true,
     description: 'Enable email notifications',
   })
+  @Transform(({ value }) => value ?? true)
   @IsBoolean()
   @IsOptional()
-  emailEnabled?: boolean = true;
+  emailEnabled?: boolean;
 
   @ApiPropertyOptional({
     default: true,
     description: 'Enable push notifications',
   })
+  @Transform(({ value }) => value ?? true)
   @IsBoolean()
   @IsOptional()
-  pushEnabled?: boolean = true;
+  pushEnabled?: boolean;
 
   @ApiPropertyOptional({
     type: Object,
