@@ -13,6 +13,8 @@ import {
   AnalyzePrivateRepoDto,
   AnalyzePublicUrlDto,
   AnalyzePrivateUrlDto,
+  AnalyzeAutoRepoDto,
+  AnalyzeAutoUrlDto,
 } from './repo-health.dto';
 
 @ApiTags('repo-health')
@@ -43,7 +45,6 @@ export class RepoHealthController {
         repo,
         undefined, // file
         rawJson,
-        // NO TOKEN for public repos
       );
     } catch (err: unknown) {
       if (err instanceof HttpException) throw err;
@@ -72,7 +73,6 @@ export class RepoHealthController {
         url,
         undefined, // file
         rawJson,
-        // NO TOKEN for public repos
       );
     } catch (err: unknown) {
       if (err instanceof HttpException) throw err;
@@ -147,21 +147,16 @@ export class RepoHealthController {
     }
   }
 
-
   @Post('analyze/auto')
   @ApiOperation({
     summary: 'Auto-detect repository type and analyze',
     description: 'Token is required only if repository is private',
   })
-  async analyzeRepoAuto(
-    @Body()
-    body: {
-      owner: string;
-      repo: string;
-      token?: string;
-      packageJson?: string;
-    },
-  ) {
+  @ApiBody({
+    type: AnalyzeAutoRepoDto,
+    description: 'Auto-detect repository visibility and analyze accordingly',
+  })
+  async analyzeRepoAuto(@Body() body: AnalyzeAutoRepoDto) {
     const { owner, repo, token, packageJson } = body;
 
     if (!owner || !repo) {
@@ -178,7 +173,7 @@ export class RepoHealthController {
         repo,
         undefined, // file
         rawJson,
-        token, // optional - only needed if private
+        token,
       );
     } catch (err: unknown) {
       if (err instanceof HttpException) throw err;
@@ -193,9 +188,12 @@ export class RepoHealthController {
     summary: 'Auto-detect repository type by URL and analyze',
     description: 'Token is required only if repository is private',
   })
-  async analyzeByUrlAuto(
-    @Body() body: { url: string; token?: string; packageJson?: string },
-  ) {
+  @ApiBody({
+    type: AnalyzeAutoUrlDto,
+    description:
+      'Auto-detect repository visibility from URL and analyze accordingly',
+  })
+  async analyzeByUrlAuto(@Body() body: AnalyzeAutoUrlDto) {
     const { url, token, packageJson } = body;
 
     if (!url) {
@@ -208,7 +206,7 @@ export class RepoHealthController {
         url,
         undefined, // file
         rawJson,
-        token, // optional - only needed if private
+        token,
       );
     } catch (err: unknown) {
       if (err instanceof HttpException) throw err;
@@ -216,5 +214,28 @@ export class RepoHealthController {
         err instanceof Error ? err.message : 'Unexpected error occurred';
       throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
+
+
+  @Post('analyze')
+  @ApiOperation({
+    summary: 'Analyze repository (legacy endpoint)',
+    description:
+      'Legacy endpoint for backward compatibility. Uses auto-detection.',
+  })
+  @ApiBody({ type: AnalyzeAutoRepoDto })
+  async analyzeRepoLegacy(@Body() body: AnalyzeAutoRepoDto) {
+    return this.analyzeRepoAuto(body);
+  }
+
+  @Post('analyze-url')
+  @ApiOperation({
+    summary: 'Analyze repository by URL (legacy endpoint)',
+    description:
+      'Legacy endpoint for backward compatibility. Uses auto-detection.',
+  })
+  @ApiBody({ type: AnalyzeAutoUrlDto })
+  async analyzeByUrlLegacy(@Body() body: AnalyzeAutoUrlDto) {
+    return this.analyzeByUrlAuto(body);
   }
 }

@@ -4,6 +4,8 @@ import { DependencyAnalysisService } from './dependency-analysis.service';
 import { HealthCalculatorService } from './health-calculator.service';
 import { RepositoryDataService } from './repository-data.service';
 import { RepoHealthDocument } from '../repo-health.model';
+import { GitHubRepoResponse } from '../repo-health.interface';
+import { DependencyAnalysisResult } from '../repo-health.interface';
 
 @Injectable()
 export class RepoHealthService {
@@ -48,45 +50,23 @@ export class RepoHealthService {
     repo: string,
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
-    // NO TOKEN PARAMETER FOR PUBLIC REPOS
   ): Promise<RepoHealthDocument> {
     const [repoData, commitActivity, securityAlerts, dependencyAnalysis] =
       await Promise.all([
-        this.githubApiService.fetchPublicRepositoryData(owner, repo), // No token
-        this.githubApiService.fetchCommitActivity(owner, repo), // No token
-        this.githubApiService.fetchSecurityAlerts(owner, repo), // No token
+        this.githubApiService.fetchPublicRepositoryData(owner, repo),
+        this.githubApiService.fetchPublicCommitActivity(owner, repo),
+        this.githubApiService.fetchPublicSecurityAlerts(owner, repo),
         this.dependencyAnalysisService.analyzeDependencies(file, rawJson),
       ]);
 
-    const overallHealth = this.healthCalculatorService.calculateHealthScore(
+    return this.computeAndUpsertHealth(
+      owner,
+      repo,
       repoData,
       commitActivity,
       securityAlerts,
-      dependencyAnalysis.dependencyHealth,
+      dependencyAnalysis,
     );
-
-    const repo_id = `${owner}/${repo}`;
-    const updateData = {
-      repo_id,
-      owner,
-      repo,
-      name: repoData.name,
-      stars: repoData.stargazers_count,
-      forks: repoData.forks_count,
-      open_issues: repoData.open_issues_count,
-      last_pushed: new Date(repoData.pushed_at),
-      commit_activity: commitActivity.map((c) => c.total),
-      security_alerts: securityAlerts.length,
-      dependency_health: dependencyAnalysis.dependencyHealth,
-      risky_dependencies: dependencyAnalysis.riskyDependencies,
-      overall_health: overallHealth,
-      bundle_size: dependencyAnalysis.bundleSize,
-      license_risks: dependencyAnalysis.licenseRisks,
-      popularity: dependencyAnalysis.popularity,
-      days_behind: dependencyAnalysis.daysBehind,
-    };
-
-    return this.repositoryDataService.upsertRepoHealth(repo_id, updateData);
   }
 
   // PRIVATE REPOSITORY - TOKEN REQUIRED
@@ -112,40 +92,19 @@ export class RepoHealthService {
     const [repoData, commitActivity, securityAlerts, dependencyAnalysis] =
       await Promise.all([
         this.githubApiService.fetchPrivateRepositoryData(owner, repo, token),
-        this.githubApiService.fetchCommitActivity(owner, repo, token),
-        this.githubApiService.fetchSecurityAlerts(owner, repo, token),
+        this.githubApiService.fetchPrivateCommitActivity(owner, repo, token),
+        this.githubApiService.fetchPrivateSecurityAlerts(owner, repo, token),
         this.dependencyAnalysisService.analyzeDependencies(file, rawJson),
       ]);
 
-    const overallHealth = this.healthCalculatorService.calculateHealthScore(
+    return this.computeAndUpsertHealth(
+      owner,
+      repo,
       repoData,
       commitActivity,
       securityAlerts,
-      dependencyAnalysis.dependencyHealth,
+      dependencyAnalysis,
     );
-
-    const repo_id = `${owner}/${repo}`;
-    const updateData = {
-      repo_id,
-      owner,
-      repo,
-      name: repoData.name,
-      stars: repoData.stargazers_count,
-      forks: repoData.forks_count,
-      open_issues: repoData.open_issues_count,
-      last_pushed: new Date(repoData.pushed_at),
-      commit_activity: commitActivity.map((c) => c.total),
-      security_alerts: securityAlerts.length,
-      dependency_health: dependencyAnalysis.dependencyHealth,
-      risky_dependencies: dependencyAnalysis.riskyDependencies,
-      overall_health: overallHealth,
-      bundle_size: dependencyAnalysis.bundleSize,
-      license_risks: dependencyAnalysis.licenseRisks,
-      popularity: dependencyAnalysis.popularity,
-      days_behind: dependencyAnalysis.daysBehind,
-    };
-
-    return this.repositoryDataService.upsertRepoHealth(repo_id, updateData);
   }
 
   // AUTO-DETECTION - TOKEN OPTIONAL (only needed if private)
@@ -207,6 +166,7 @@ export class RepoHealthService {
     return this.analyzeRepositoryAuto(owner, repo, file, rawJson, token);
   }
 
+
   async analyzeRepo(
     owner: string,
     repo: string,
@@ -225,6 +185,7 @@ export class RepoHealthService {
   ): Promise<RepoHealthDocument> {
     return this.analyzeByUrlAuto(url, file, rawJson, token);
   }
+
 
   async findOne(repo_id: string): Promise<RepoHealthDocument | null> {
     return this.repositoryDataService.findOne(repo_id);
@@ -254,6 +215,46 @@ export class RepoHealthService {
     return { visibility };
   }
 
+
+  private async computeAndUpsertHealth(
+    owner: string,
+    repo: string,
+    repoData: GitHubRepoResponse,
+    commitActivity: any[],
+    securityAlerts: any[],
+    dependencyAnalysis: DependencyAnalysisResult,
+  ): Promise<RepoHealthDocument> {
+    const overallHealth = this.healthCalculatorService.calculateHealthScore(
+      repoData,
+      commitActivity,
+      securityAlerts,
+      dependencyAnalysis.dependencyHealth,
+    );
+
+    const repo_id = `${owner}/${repo}`;
+    const updateData = {
+      repo_id,
+      owner,
+      repo,
+      name: repoData.name,
+      stars: repoData.stargazers_count,
+      forks: repoData.forks_count,
+      open_issues: repoData.open_issues_count,
+      last_pushed: new Date(repoData.pushed_at),
+      commit_activity: commitActivity.map((c) => c.total),
+      security_alerts: securityAlerts.length,
+      dependency_health: dependencyAnalysis.dependencyHealth,
+      risky_dependencies: dependencyAnalysis.riskyDependencies,
+      overall_health: overallHealth,
+      bundle_size: dependencyAnalysis.bundleSize,
+      license_risks: dependencyAnalysis.licenseRisks,
+      popularity: dependencyAnalysis.popularity,
+      days_behind: dependencyAnalysis.daysBehind,
+    };
+
+    return this.repositoryDataService.upsertRepoHealth(repo_id, updateData);
+  }
+
   private parseGitHubUrl(url: string): { owner: string; repo: string } {
     url = url
       .trim()
@@ -273,6 +274,7 @@ export class RepoHealthService {
 
     return match.groups as { owner: string; repo: string };
   }
+
 
   async processDependencies(
     file?: Express.Multer.File,

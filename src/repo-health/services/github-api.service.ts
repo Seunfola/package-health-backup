@@ -100,7 +100,7 @@ export class GithubApiService {
     repo: string,
     token: string,
   ): Promise<GitHubRepoResponse> {
-    if (!token) {
+    if (!token?.trim()) {
       throw new HttpException(
         'Token is required for private repositories',
         HttpStatus.BAD_REQUEST,
@@ -135,7 +135,7 @@ export class GithubApiService {
     repo: string,
     token: string,
   ): Promise<CommitActivityItem[]> {
-    if (!token) {
+    if (!token?.trim()) {
       throw new HttpException(
         'Token is required for private repositories',
         HttpStatus.BAD_REQUEST,
@@ -163,7 +163,7 @@ export class GithubApiService {
     repo: string,
     token: string,
   ): Promise<any[]> {
-    if (!token) {
+    if (!token?.trim()) {
       throw new HttpException(
         'Token is required for private repositories',
         HttpStatus.BAD_REQUEST,
@@ -186,7 +186,7 @@ export class GithubApiService {
     repo: string,
     token?: string,
   ): Promise<GitHubRepoResponse> {
-    if (token) {
+    if (token?.trim()) {
       return this.fetchPrivateRepositoryData(owner, repo, token);
     } else {
       return this.fetchPublicRepositoryData(owner, repo);
@@ -198,7 +198,7 @@ export class GithubApiService {
     repo: string,
     token?: string,
   ): Promise<CommitActivityItem[]> {
-    if (token) {
+    if (token?.trim()) {
       return this.fetchPrivateCommitActivity(owner, repo, token);
     } else {
       return this.fetchPublicCommitActivity(owner, repo);
@@ -210,7 +210,7 @@ export class GithubApiService {
     repo: string,
     token?: string,
   ): Promise<any[]> {
-    if (token) {
+    if (token?.trim()) {
       return this.fetchPrivateSecurityAlerts(owner, repo, token);
     } else {
       return this.fetchPublicSecurityAlerts(owner, repo);
