@@ -1,3 +1,4 @@
+// src/repo-health/repo-health.controller.ts
 import {
   Controller,
   Post,
@@ -23,23 +24,12 @@ import {
 import { RepoHealthService } from './services/repo-health.service';
 import { GithubApiService } from './services/github-api.service';
 import { DependencyAnalysisService } from './services/dependency-analysis.service';
-
-interface UrlBody {
-  url: string;
-  token?: string;
-}
-
-interface OwnerRepoBody {
-  owner: string;
-  repo: string;
-}
-
-interface AnalyzeBody {
-  owner: string;
-  repo: string;
-  token?: string;
-  packageJson?: string;
-}
+import {
+  AnalyzeRepoDto,
+  AnalyzeUrlDto,
+  AnalyzePrivateRepoDto,
+  AnalyzePrivateUrlDto,
+} from './repo-health.dto';
 
 @ApiTags('repo-health')
 @Controller('repo-health')
@@ -50,7 +40,6 @@ export class RepoHealthController {
     private readonly dependencyAnalysisService: DependencyAnalysisService,
   ) {}
 
-  // ==================== PUBLIC REPOSITORY ANALYSIS ====================
 
   @Post('public/repo')
   @ApiOperation({
@@ -66,7 +55,7 @@ export class RepoHealthController {
     status: 400,
     description: 'Invalid input or repository not found',
   })
-  async analyzePublicRepo(@Body() body: AnalyzeBody) {
+  async analyzePublicRepo(@Body() body: AnalyzeRepoDto) {
     const { owner, repo, token, packageJson } = body;
 
     if (!owner || !repo) {
@@ -81,7 +70,7 @@ export class RepoHealthController {
       return await this.repoHealthService.analyzePublicRepository(
         owner,
         repo,
-        undefined,
+        undefined, // file
         rawJson,
         token,
       );
@@ -99,27 +88,7 @@ export class RepoHealthController {
     description:
       'Analyze a public GitHub repository using its URL. Token is optional for rate limiting.',
   })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', example: 'https://github.com/nestjs/nest' },
-        token: {
-          type: 'string',
-          example: 'ghp_xxx',
-          description: 'Optional GitHub token for rate limiting',
-        },
-        packageJson: {
-          type: 'string',
-          description: 'Optional package.json content as string',
-        },
-      },
-      required: ['url'],
-    },
-  })
-  async analyzePublicRepoByUrl(
-    @Body() body: UrlBody & { packageJson?: string },
-  ) {
+  async analyzePublicRepoByUrl(@Body() body: AnalyzeUrlDto) {
     const { url, token, packageJson } = body;
 
     if (!url) {
@@ -130,7 +99,7 @@ export class RepoHealthController {
       const rawJson = packageJson ? JSON.parse(packageJson) : undefined;
       return await this.repoHealthService.analyzePublicRepoByUrl(
         url,
-        undefined,
+        undefined, // file
         rawJson,
         token,
       );
@@ -147,26 +116,7 @@ export class RepoHealthController {
     summary: 'Analyze private repository by owner and repo name',
     description: 'Analyze a private GitHub repository. Token is required.',
   })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        owner: { type: 'string', example: 'your-username' },
-        repo: { type: 'string', example: 'your-private-repo' },
-        token: {
-          type: 'string',
-          example: 'ghp_xxx',
-          description: 'GitHub token (required)',
-        },
-        packageJson: {
-          type: 'string',
-          description: 'Optional package.json content as string',
-        },
-      },
-      required: ['owner', 'repo', 'token'],
-    },
-  })
-  async analyzePrivateRepo(@Body() body: AnalyzeBody & { token: string }) {
+  async analyzePrivateRepo(@Body() body: AnalyzePrivateRepoDto) {
     const { owner, repo, token, packageJson } = body;
 
     if (!owner || !repo || !token) {
@@ -182,7 +132,7 @@ export class RepoHealthController {
         owner,
         repo,
         token,
-        undefined,
+        undefined, // file
         rawJson,
       );
     } catch (err: unknown) {
@@ -199,30 +149,7 @@ export class RepoHealthController {
     description:
       'Analyze a private GitHub repository using its URL. Token is required.',
   })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          example: 'https://github.com/username/private-repo',
-        },
-        token: {
-          type: 'string',
-          example: 'ghp_xxx',
-          description: 'GitHub token (required)',
-        },
-        packageJson: {
-          type: 'string',
-          description: 'Optional package.json content as string',
-        },
-      },
-      required: ['url', 'token'],
-    },
-  })
-  async analyzePrivateRepoByUrl(
-    @Body() body: UrlBody & { token: string; packageJson?: string },
-  ) {
+  async analyzePrivateRepoByUrl(@Body() body: AnalyzePrivateUrlDto) {
     const { url, token, packageJson } = body;
 
     if (!url || !token) {
@@ -237,7 +164,7 @@ export class RepoHealthController {
       return await this.repoHealthService.analyzePrivateRepoByUrl(
         url,
         token,
-        undefined,
+        undefined, // file
         rawJson,
       );
     } catch (err: unknown) {
@@ -254,26 +181,7 @@ export class RepoHealthController {
     description:
       'Automatically detect if repository is public or private and analyze accordingly.',
   })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        owner: { type: 'string', example: 'nestjs' },
-        repo: { type: 'string', example: 'nest' },
-        token: {
-          type: 'string',
-          example: 'ghp_xxx',
-          description: 'Optional token (required for private repos)',
-        },
-        packageJson: {
-          type: 'string',
-          description: 'Optional package.json content as string',
-        },
-      },
-      required: ['owner', 'repo'],
-    },
-  })
-  async analyzeRepoAuto(@Body() body: AnalyzeBody) {
+  async analyzeRepoAuto(@Body() body: AnalyzeRepoDto) {
     const { owner, repo, token, packageJson } = body;
 
     if (!owner || !repo) {
@@ -288,7 +196,7 @@ export class RepoHealthController {
       return await this.repoHealthService.analyzeRepositoryAuto(
         owner,
         repo,
-        undefined,
+        undefined, // file
         rawJson,
         token,
       );
@@ -306,25 +214,7 @@ export class RepoHealthController {
     description:
       'Automatically detect repository visibility and analyze using URL.',
   })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', example: 'https://github.com/nestjs/nest' },
-        token: {
-          type: 'string',
-          example: 'ghp_xxx',
-          description: 'Optional token (required for private repos)',
-        },
-        packageJson: {
-          type: 'string',
-          description: 'Optional package.json content as string',
-        },
-      },
-      required: ['url'],
-    },
-  })
-  async analyzeByUrlAuto(@Body() body: UrlBody & { packageJson?: string }) {
+  async analyzeByUrlAuto(@Body() body: AnalyzeUrlDto) {
     const { url, token, packageJson } = body;
 
     if (!url) {
@@ -335,7 +225,7 @@ export class RepoHealthController {
       const rawJson = packageJson ? JSON.parse(packageJson) : undefined;
       return await this.repoHealthService.analyzeByUrlAuto(
         url,
-        undefined,
+        undefined, // file
         rawJson,
         token,
       );
@@ -344,74 +234,6 @@ export class RepoHealthController {
       const message =
         err instanceof Error ? err.message : 'Unexpected error occurred';
       throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
-  @Post('visibility/check')
-  @ApiOperation({
-    summary: 'Check repository visibility',
-    description: 'Determine if a repository is public or private.',
-  })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', example: 'https://github.com/nestjs/nest' },
-        token: {
-          type: 'string',
-          example: 'ghp_xxx',
-          description: 'Optional token for private repository verification',
-        },
-      },
-      required: ['url'],
-    },
-  })
-  async checkVisibility(@Body() body: UrlBody) {
-    const { url, token } = body;
-
-    if (!url) {
-      throw new HttpException('GitHub URL is required', HttpStatus.BAD_REQUEST);
-    }
-
-    try {
-      return await this.repoHealthService.checkRepoVisibility(url, token);
-    } catch (err: unknown) {
-      if (err instanceof HttpException) throw err;
-      const message =
-        err instanceof Error ? err.message : 'Unexpected error occurred';
-      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
-  @Post('debug-visibility')
-  @ApiOperation({
-    summary: 'Debug repository visibility detection',
-    description:
-      'Get detailed information about repository visibility detection.',
-  })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', example: 'https://github.com/nestjs/nest' },
-        token: { type: 'string', example: 'ghp_xxx' },
-      },
-      required: ['url'],
-    },
-  })
-  async debugVisibility(@Body() body: UrlBody) {
-    const { url, token } = body;
-
-    if (!url) {
-      throw new HttpException('GitHub URL is required', HttpStatus.BAD_REQUEST);
-    }
-
-    try {
-      // This method should be added to the service for detailed debugging
-      return await this.repoHealthService['debugRepoVisibility'](url, token);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new HttpException(message, HttpStatus.BAD_REQUEST);
     }
   }
 
@@ -428,42 +250,17 @@ export class RepoHealthController {
       type: 'object',
       properties: {
         file: { type: 'string', format: 'binary' },
-        analyzeHealth: {
-          type: 'boolean',
-          description: 'Whether to perform full health analysis',
-        },
       },
       required: ['file'],
     },
   })
-  async analyzeDependenciesFromFile(
-    @UploadedFile() file: Express.Multer.File,
-    @Body('analyzeHealth') analyzeHealth?: boolean,
-  ) {
+  async analyzeDependenciesFromFile(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
       throw new HttpException('No file uploaded', HttpStatus.BAD_REQUEST);
     }
 
     try {
-      const analysis =
-        await this.dependencyAnalysisService.analyzeDependencies(file);
-
-      if (analyzeHealth) {
-        // Perform additional health analysis if requested
-        const healthScore = this.repoHealthService.calculateHealthScore(
-          {} as any, // Mock repo data
-          [], // Mock commit activity
-          [], // Mock security alerts
-          analysis.dependencyHealth,
-        );
-
-        return {
-          ...analysis,
-          healthScore,
-        };
-      }
-
-      return analysis;
+      return await this.dependencyAnalysisService.analyzeDependencies(file);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       throw new HttpException(message, HttpStatus.BAD_REQUEST);
@@ -477,44 +274,21 @@ export class RepoHealthController {
       type: 'object',
       properties: {
         json: { type: 'string', description: 'Raw package.json content' },
-        analyzeHealth: {
-          type: 'boolean',
-          description: 'Whether to perform full health analysis',
-        },
       },
       required: ['json'],
     },
   })
-  async analyzeDependenciesFromJson(
-    @Body('json') json: string,
-    @Body('analyzeHealth') analyzeHealth?: boolean,
-  ) {
+  async analyzeDependenciesFromJson(@Body('json') json: string) {
     if (!json) {
       throw new HttpException('No JSON provided', HttpStatus.BAD_REQUEST);
     }
 
     try {
       const rawJson = JSON.parse(json);
-      const analysis = await this.dependencyAnalysisService.analyzeDependencies(
+      return await this.dependencyAnalysisService.analyzeDependencies(
         undefined,
         rawJson,
       );
-
-      if (analyzeHealth) {
-        const healthScore = this.repoHealthService.calculateHealthScore(
-          {} as any,
-          [],
-          [],
-          analysis.dependencyHealth,
-        );
-
-        return {
-          ...analysis,
-          healthScore,
-        };
-      }
-
-      return analysis;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       throw new HttpException(message, HttpStatus.BAD_REQUEST);
@@ -557,16 +331,10 @@ export class RepoHealthController {
   @Get('search')
   @ApiOperation({ summary: 'Search repositories' })
   @ApiQuery({ name: 'owner', required: false, description: 'Filter by owner' })
-  @ApiQuery({
-    name: 'minHealth',
-    required: false,
-    description: 'Minimum health score',
-  })
   @ApiQuery({ name: 'page', required: false, description: 'Page number' })
   @ApiQuery({ name: 'limit', required: false, description: 'Items per page' })
   async searchRepos(
     @Query('owner') owner?: string,
-    @Query('minHealth') minHealth?: number,
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
@@ -595,70 +363,13 @@ export class RepoHealthController {
     }
   }
 
-  @Get('stats')
-  @ApiOperation({ summary: 'Get repository health statistics' })
-  async getStats() {
-    try {
-      return await this.repoHealthService.getStats();
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Unexpected error occurred';
-      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
-  @Delete('repo/:owner/:repo')
-  @ApiOperation({ summary: 'Delete repository analysis' })
-  async deleteRepoAnalysis(
-    @Param('owner') owner: string,
-    @Param('repo') repo: string,
-  ) {
-    if (!owner || !repo) {
-      throw new HttpException(
-        'Both owner and repo are required',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-
-    try {
-      const repoId = `${owner}/${repo}`;
-      const deleted = await this.repoHealthService['deleteRepo'](repoId);
-
-      if (!deleted) {
-        throw new HttpException(
-          'Repository analysis not found',
-          HttpStatus.NOT_FOUND,
-        );
-      }
-
-      return { message: 'Repository analysis deleted successfully' };
-    } catch (err: unknown) {
-      if (err instanceof HttpException) throw err;
-      const message =
-        err instanceof Error ? err.message : 'Unexpected error occurred';
-      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
   @Post('analyze')
   @ApiOperation({
     summary: 'Analyze repository (legacy endpoint)',
     description:
       'Legacy endpoint for backward compatibility. Uses auto-detection.',
   })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        owner: { type: 'string', example: 'nestjs' },
-        repo: { type: 'string', example: 'nest' },
-        token: { type: 'string', example: 'ghp_xxx' },
-        packageJson: { type: 'string' },
-      },
-      required: ['owner', 'repo'],
-    },
-  })
-  async analyzeRepoLegacy(@Body() body: AnalyzeBody) {
+  async analyzeRepoLegacy(@Body() body: AnalyzeRepoDto) {
     return this.analyzeRepoAuto(body);
   }
 
@@ -668,18 +379,7 @@ export class RepoHealthController {
     description:
       'Legacy endpoint for backward compatibility. Uses auto-detection.',
   })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', example: 'https://github.com/nestjs/nest' },
-        token: { type: 'string', example: 'ghp_xxx' },
-        packageJson: { type: 'string' },
-      },
-      required: ['url'],
-    },
-  })
-  async analyzeByUrlLegacy(@Body() body: UrlBody & { packageJson?: string }) {
+  async analyzeByUrlLegacy(@Body() body: AnalyzeUrlDto) {
     return this.analyzeByUrlAuto(body);
   }
 }
