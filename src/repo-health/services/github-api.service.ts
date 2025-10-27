@@ -176,10 +176,7 @@ export class GithubApiService {
           Accept: 'application/vnd.github.dorian-preview+json',
         },
       };
-      const data = await this.makeGitHubRequest<SecurityAlert[]>(
-        url,
-        options as any,
-      );
+      const data = await this.makeGitHubRequest<SecurityAlert[]>(url);
       return Array.isArray(data) ? data : [];
     } catch (error: any) {
       this.logger.debug(`Security alerts not available for ${owner}/${repo}`);
@@ -264,7 +261,6 @@ export class GithubApiService {
   }
 
   // VISIBILITY DETECTION
-  // github-api.service.ts - FIXED VERSION
   async determineRepoVisibility(
     owner: string,
     repo: string,
@@ -298,21 +294,18 @@ export class GithubApiService {
           });
           return visibility;
         } catch (error: any) {
-          // If public request fails with 404, repo doesn't exist
           if (error?.response?.status === 404) {
             throw new RepositoryNotFoundException(owner, repo);
           }
-          // For other errors with public request, assume it might be private
           const visibility: 'public' | 'private' = 'private';
           this.cache.set(cacheKey, {
             createdAt: Date.now(),
-            ttlMs: 5 * 60 * 1000, // Short TTL
+            ttlMs: 5 * 60 * 1000,
             value: visibility,
           });
           return visibility;
         }
       } else {
-        // Token provided - use it to get accurate visibility
         const repoData = await this.makeGitHubRequest<GitHubRepoResponse>(
           url,
           token,
@@ -336,7 +329,6 @@ export class GithubApiService {
         if (token) {
           throw new InvalidTokenException();
         }
-        // No token but got auth error - must be private
         const visibility: 'public' | 'private' = 'private';
         this.cache.set(cacheKey, {
           createdAt: Date.now(),
@@ -347,11 +339,10 @@ export class GithubApiService {
       } else if (status === 404) {
         throw new RepositoryNotFoundException(owner, repo);
       } else {
-        // For network errors, default to public
         const visibility: 'public' | 'private' = 'public';
         this.cache.set(cacheKey, {
           createdAt: Date.now(),
-          ttlMs: 5 * 60 * 1000, // Short TTL for fallback
+          ttlMs: 5 * 60 * 1000,
           value: visibility,
         });
         return visibility;
