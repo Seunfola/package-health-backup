@@ -38,11 +38,75 @@ export class GithubApiService {
     return response.data;
   }
 
-  async fetchRepositoryData(
+  // PUBLIC REPOSITORY METHODS
+
+  async fetchPublicRepositoryData(
     owner: string,
     repo: string,
-    token?: string,
   ): Promise<GitHubRepoResponse> {
+    try {
+      const url = `https://api.github.com/repos/${owner}/${repo}`;
+      return await this.makeGitHubRequest<GitHubRepoResponse>(url);
+    } catch (err: any) {
+      const status = err?.response?.status ?? 0;
+      if (status === 404) {
+        throw new HttpException(
+          `Repository '${owner}/${repo}' not found.`,
+          HttpStatus.NOT_FOUND,
+        );
+      }
+      throw new HttpException(
+        `Failed to fetch public repository '${owner}/${repo}'.`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  async fetchPublicCommitActivity(
+    owner: string,
+    repo: string,
+  ): Promise<CommitActivityItem[]> {
+    try {
+      const url = `https://api.github.com/repos/${owner}/${repo}/stats/commit_activity`;
+      const data = await this.makeGitHubRequest<any>(url);
+
+      if (!Array.isArray(data)) return [];
+
+      return data.map((item: any) => ({
+        week: typeof item.week === 'number' ? item.week : 0,
+        total: typeof item.total === 'number' ? item.total : 0,
+      }));
+    } catch (err: any) {
+      this.logger.debug(`Commit activity not available for ${owner}/${repo}`);
+      return [];
+    }
+  }
+
+  async fetchPublicSecurityAlerts(owner: string, repo: string): Promise<any[]> {
+    try {
+      const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
+      await this.makeGitHubRequest(url);
+      return [true];
+    } catch (err: any) {
+      this.logger.debug(`Security alerts not available for ${owner}/${repo}`);
+      return [];
+    }
+  }
+
+  // PRIVATE REPOSITORY METHODS - TOKEN REQUIRED
+
+  async fetchPrivateRepositoryData(
+    owner: string,
+    repo: string,
+    token: string,
+  ): Promise<GitHubRepoResponse> {
+    if (!token?.trim()) {
+      throw new HttpException(
+        'Token is required for private repositories',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     try {
       const url = `https://api.github.com/repos/${owner}/${repo}`;
       return await this.makeGitHubRequest<GitHubRepoResponse>(url, token);
@@ -55,22 +119,29 @@ export class GithubApiService {
         );
       } else if (status === 401 || status === 403) {
         throw new HttpException(
-          'Invalid or expired GitHub token provided.',
+          'Invalid or expired GitHub token provided for private repository.',
           HttpStatus.BAD_REQUEST,
         );
       }
       throw new HttpException(
-        `Failed to fetch repository '${owner}/${repo}'.`,
+        `Failed to fetch private repository '${owner}/${repo}'.`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  async fetchCommitActivity(
+  async fetchPrivateCommitActivity(
     owner: string,
     repo: string,
-    token?: string,
+    token: string,
   ): Promise<CommitActivityItem[]> {
+    if (!token?.trim()) {
+      throw new HttpException(
+        'Token is required for private repositories',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     try {
       const url = `https://api.github.com/repos/${owner}/${repo}/stats/commit_activity`;
       const data = await this.makeGitHubRequest<any>(url, token);
@@ -87,11 +158,18 @@ export class GithubApiService {
     }
   }
 
-  async fetchSecurityAlerts(
+  async fetchPrivateSecurityAlerts(
     owner: string,
     repo: string,
-    token?: string,
+    token: string,
   ): Promise<any[]> {
+    if (!token?.trim()) {
+      throw new HttpException(
+        'Token is required for private repositories',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     try {
       const url = `https://api.github.com/repos/${owner}/${repo}/vulnerability-alerts`;
       await this.makeGitHubRequest(url, token);
@@ -101,6 +179,45 @@ export class GithubApiService {
       return [];
     }
   }
+
+  // LEGACY METHODS (for backward compatibility - can be removed later)
+  async fetchRepositoryData(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<GitHubRepoResponse> {
+    if (token?.trim()) {
+      return this.fetchPrivateRepositoryData(owner, repo, token);
+    } else {
+      return this.fetchPublicRepositoryData(owner, repo);
+    }
+  }
+
+  async fetchCommitActivity(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<CommitActivityItem[]> {
+    if (token?.trim()) {
+      return this.fetchPrivateCommitActivity(owner, repo, token);
+    } else {
+      return this.fetchPublicCommitActivity(owner, repo);
+    }
+  }
+
+  async fetchSecurityAlerts(
+    owner: string,
+    repo: string,
+    token?: string,
+  ): Promise<any[]> {
+    if (token?.trim()) {
+      return this.fetchPrivateSecurityAlerts(owner, repo, token);
+    } else {
+      return this.fetchPublicSecurityAlerts(owner, repo);
+    }
+  }
+
+  // VISIBILITY DETECTION
 
   async determineRepoVisibility(
     owner: string,

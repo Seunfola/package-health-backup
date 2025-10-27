@@ -59,7 +59,6 @@ export class NotificationService {
         repo,
       );
 
-      // Get user preferences if userId is provided
       let userPreferences: UserPreferences | null = null;
       if (userId) {
         userPreferences =
