@@ -134,7 +134,7 @@ export class RepoHealthService {
     return this.analyzePublicRepository(owner, repo, file, rawJson);
   }
 
-  // PUBLIC URL
+  // PUBLIC URL - NO TOKEN
   async analyzePublicRepoByUrl(
     url: string,
     file?: Express.Multer.File,
@@ -155,7 +155,7 @@ export class RepoHealthService {
     return this.analyzePrivateRepository(owner, repo, token, file, rawJson);
   }
 
-  // AUTO URL - TOKEN OPTIONAL
+  // AUTO URL - TOKEN OPTIONAL (for backward compatibility)
   async analyzeByUrlAuto(
     url: string,
     file?: Express.Multer.File,
@@ -165,7 +165,6 @@ export class RepoHealthService {
     const { owner, repo } = this.parseGitHubUrl(url);
     return this.analyzeRepositoryAuto(owner, repo, file, rawJson, token);
   }
-
 
   async analyzeRepo(
     owner: string,
@@ -177,15 +176,34 @@ export class RepoHealthService {
     return this.analyzeRepositoryAuto(owner, repo, file, rawJson, token);
   }
 
-  async analyzeByUrl(
-    url: string,
-    file?: Express.Multer.File,
-    rawJson?: string | Record<string, unknown>,
-    token?: string,
-  ): Promise<RepoHealthDocument> {
-    return this.analyzeByUrlAuto(url, file, rawJson, token);
+  // FIXED: This method should take URL only (no token for public)
+  async analyzeByUrl(url: string): Promise<RepoHealthDocument> {
+    const { owner, repo } = this.parseGitHubUrl(url);
+
+    // Auto-detect visibility and handle accordingly
+    const visibility = await this.githubApiService.determineRepoVisibility(
+      owner,
+      repo,
+    );
+
+    if (visibility === 'private') {
+      throw new HttpException(
+        `Repository '${owner}/${repo}' is private. Use the private analysis endpoint with a token.`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return this.analyzePublicRepository(owner, repo);
   }
 
+  // NEW: Method for private URL analysis with token
+  async analyzePrivateByUrl(
+    url: string,
+    token: string,
+  ): Promise<RepoHealthDocument> {
+    const { owner, repo } = this.parseGitHubUrl(url);
+    return this.analyzePrivateRepository(owner, repo, token);
+  }
 
   async findOne(repo_id: string): Promise<RepoHealthDocument | null> {
     return this.repositoryDataService.findOne(repo_id);
@@ -214,7 +232,6 @@ export class RepoHealthService {
     );
     return { visibility };
   }
-
 
   private async computeAndUpsertHealth(
     owner: string,
@@ -274,7 +291,6 @@ export class RepoHealthService {
 
     return match.groups as { owner: string; repo: string };
   }
-
 
   async processDependencies(
     file?: Express.Multer.File,

@@ -31,18 +31,15 @@ import {
 export class RepoHealthController {
   constructor(private readonly repoHealthService: RepoHealthService) {}
 
-
   @Post('public')
   @ApiOperation({
     summary: 'Analyze PUBLIC repository by URL',
-    description: 'No token required for public repositories',
+    description: 'URL only. No token required for public repositories.',
   })
   @ApiBody({ type: AnalyzeUrlDto })
-  async analyzePublicRepo(@Body() body: AnalyzeUrlDto) {
-    const { url } = body;
-
+  async analyzePublic(@Body() body: AnalyzeUrlDto) {
     try {
-      return await this.repoHealthService.analyzePublicRepoByUrl(url);
+      return await this.repoHealthService.analyzeByUrl(body.url);
     } catch (err: unknown) {
       if (err instanceof HttpException) throw err;
       const message =
@@ -54,158 +51,14 @@ export class RepoHealthController {
   @Post('private')
   @ApiOperation({
     summary: 'Analyze PRIVATE repository by URL',
-    description: 'Token is REQUIRED for private repositories',
+    description: 'URL and token required for private repositories.',
   })
   @ApiBody({ type: AnalyzePrivateUrlDto })
-  async analyzePrivateRepo(@Body() body: AnalyzePrivateUrlDto) {
-    const { url, token } = body;
-
+  async analyzePrivate(@Body() body: AnalyzePrivateUrlDto) {
     try {
-      return await this.repoHealthService.analyzePrivateRepoByUrl(url, token);
-    } catch (err: unknown) {
-      if (err instanceof HttpException) throw err;
-      const message =
-        err instanceof Error ? err.message : 'Unexpected error occurred';
-      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
-  @Post('public/with-json')
-  @ApiOperation({
-    summary: 'Analyze PUBLIC repository with package.json',
-    description: 'No token required for public repositories',
-  })
-  @ApiBody({ type: AnalyzeWithJsonDto })
-  async analyzePublicWithJson(@Body() body: AnalyzeWithJsonDto) {
-    const { url, packageJson } = body;
-
-    try {
-      const rawJson = JSON.parse(packageJson);
-      return await this.repoHealthService.analyzePublicRepoByUrl(
-        url,
-        undefined,
-        rawJson,
-      );
-    } catch (err: unknown) {
-      if (err instanceof HttpException) throw err;
-      const message =
-        err instanceof Error ? err.message : 'Invalid JSON format';
-      throw new HttpException(message, HttpStatus.BAD_REQUEST);
-    }
-  }
-
-  @Post('private/with-json')
-  @ApiOperation({
-    summary: 'Analyze PRIVATE repository with package.json',
-    description: 'Token is REQUIRED for private repositories',
-  })
-  @ApiBody({ type: AnalyzePrivateWithJsonDto })
-  async analyzePrivateWithJson(@Body() body: AnalyzePrivateWithJsonDto) {
-    const { url, token, packageJson } = body;
-
-    try {
-      const rawJson = JSON.parse(packageJson);
-      return await this.repoHealthService.analyzePrivateRepoByUrl(
-        url,
-        token,
-        undefined,
-        rawJson,
-      );
-    } catch (err: unknown) {
-      if (err instanceof HttpException) throw err;
-      const message =
-        err instanceof Error ? err.message : 'Invalid JSON format';
-      throw new HttpException(message, HttpStatus.BAD_REQUEST);
-    }
-  }
-
-  @Post('public/with-upload')
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiOperation({
-    summary: 'Analyze PUBLIC repository with uploaded file',
-    description: 'No token required for public repositories',
-  })
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          example: 'https://github.com/nestjs/nest',
-          description: 'GitHub repository URL',
-        },
-        file: {
-          type: 'string',
-          format: 'binary',
-          description: 'package.json file to upload',
-        },
-      },
-      required: ['url', 'file'],
-    },
-  })
-  async analyzePublicWithUpload(
-    @Body('url') url: string,
-    @UploadedFile() file: Express.Multer.File,
-  ) {
-    if (!file) {
-      throw new HttpException('File is required', HttpStatus.BAD_REQUEST);
-    }
-
-    try {
-      return await this.repoHealthService.analyzePublicRepoByUrl(url, file);
-    } catch (err: unknown) {
-      if (err instanceof HttpException) throw err;
-      const message =
-        err instanceof Error ? err.message : 'Unexpected error occurred';
-      throw new HttpException(message, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
-  @Post('private/with-upload')
-  @UseInterceptors(FileInterceptor('file'))
-  @ApiOperation({
-    summary: 'Analyze PRIVATE repository with uploaded file',
-    description: 'Token is REQUIRED for private repositories',
-  })
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          example: 'https://github.com/username/private-repo',
-          description: 'GitHub repository URL',
-        },
-        token: {
-          type: 'string',
-          example: 'ghp_xxx',
-          description: 'GitHub token',
-        },
-        file: {
-          type: 'string',
-          format: 'binary',
-          description: 'package.json file to upload',
-        },
-      },
-      required: ['url', 'token', 'file'],
-    },
-  })
-  async analyzePrivateWithUpload(
-    @Body('url') url: string,
-    @Body('token') token: string,
-    @UploadedFile() file: Express.Multer.File,
-  ) {
-    if (!file) {
-      throw new HttpException('File is required', HttpStatus.BAD_REQUEST);
-    }
-
-    try {
-      return await this.repoHealthService.analyzePrivateRepoByUrl(
-        url,
-        token,
-        file,
+      return await this.repoHealthService.analyzePrivateByUrl(
+        body.url,
+        body.token,
       );
     } catch (err: unknown) {
       if (err instanceof HttpException) throw err;
