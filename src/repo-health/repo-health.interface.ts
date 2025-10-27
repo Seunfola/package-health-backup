@@ -10,6 +10,7 @@ export interface GitHubRepoResponse {
     avatar_url: string;
     type: string;
   };
+  private?: boolean;
   html_url: string;
   description: string | null;
   fork: boolean;

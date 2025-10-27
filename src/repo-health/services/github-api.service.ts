@@ -176,7 +176,10 @@ export class GithubApiService {
           Accept: 'application/vnd.github.dorian-preview+json',
         },
       };
-      const data = await this.makeGitHubRequest<SecurityAlert[]>(url, options as any);
+      const data = await this.makeGitHubRequest<SecurityAlert[]>(
+        url,
+        options as any,
+      );
       return Array.isArray(data) ? data : [];
     } catch (error: any) {
       this.logger.debug(`Security alerts not available for ${owner}/${repo}`);
@@ -261,6 +264,7 @@ export class GithubApiService {
   }
 
   // VISIBILITY DETECTION
+  // github-api.service.ts - FIXED VERSION
   async determineRepoVisibility(
     owner: string,
     repo: string,
@@ -277,26 +281,62 @@ export class GithubApiService {
 
     try {
       const url = `${this.BASE_URL}/repos/${owner}/${repo}`;
-      const repoData = await this.makeGitHubRequest<GitHubRepoResponse>(
-        url,
-        token,
-      );
 
-      const visibility: 'public' | 'private' = repoData.visibility === 'private'
-        ? 'private'
-        : 'public';
+      // Use public request if no token provided
+      if (!token) {
+        try {
+          const repoData =
+            await this.makeGitHubRequest<GitHubRepoResponse>(url);
+          const visibility: 'public' | 'private' = repoData.private
+            ? 'private'
+            : 'public';
 
-      this.cache.set(cacheKey, {
-        createdAt: Date.now(),
-        ttlMs: this.CACHE_TTL.VISIBILITY,
-        value: visibility,
-      });
+          this.cache.set(cacheKey, {
+            createdAt: Date.now(),
+            ttlMs: this.CACHE_TTL.VISIBILITY,
+            value: visibility,
+          });
+          return visibility;
+        } catch (error: any) {
+          // If public request fails with 404, repo doesn't exist
+          if (error?.response?.status === 404) {
+            throw new RepositoryNotFoundException(owner, repo);
+          }
+          // For other errors with public request, assume it might be private
+          const visibility: 'public' | 'private' = 'private';
+          this.cache.set(cacheKey, {
+            createdAt: Date.now(),
+            ttlMs: 5 * 60 * 1000, // Short TTL
+            value: visibility,
+          });
+          return visibility;
+        }
+      } else {
+        // Token provided - use it to get accurate visibility
+        const repoData = await this.makeGitHubRequest<GitHubRepoResponse>(
+          url,
+          token,
+        );
+        const visibility: 'public' | 'private' = repoData.private
+          ? 'private'
+          : 'public';
 
-      return visibility;
+        this.cache.set(cacheKey, {
+          createdAt: Date.now(),
+          ttlMs: this.CACHE_TTL.VISIBILITY,
+          value: visibility,
+        });
+        return visibility;
+      }
     } catch (error: any) {
       const status = error?.response?.status;
 
       if (status === 401 || status === 403) {
+        // Token is invalid or doesn't have access
+        if (token) {
+          throw new InvalidTokenException();
+        }
+        // No token but got auth error - must be private
         const visibility: 'public' | 'private' = 'private';
         this.cache.set(cacheKey, {
           createdAt: Date.now(),
@@ -307,7 +347,7 @@ export class GithubApiService {
       } else if (status === 404) {
         throw new RepositoryNotFoundException(owner, repo);
       } else {
-        // Default to public for other errors
+        // For network errors, default to public
         const visibility: 'public' | 'private' = 'public';
         this.cache.set(cacheKey, {
           createdAt: Date.now(),
