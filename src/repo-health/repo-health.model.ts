@@ -66,8 +66,6 @@ export class RepoHealth extends Document {
   @Prop()
   days_behind!: number;
 
-  @Prop()
-  updatedAt!: Date;
 }
 
 export const RepoHealthSchema = SchemaFactory.createForClass(RepoHealth);

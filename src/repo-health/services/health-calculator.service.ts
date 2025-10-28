@@ -44,11 +44,10 @@ export class HealthCalculatorService {
 
     const metrics = {
       security: Math.round(securityPenalty * 100),
-      performance: Math.round(starsScore * 100),
-      reliability: Math.round(commitScore * 100),
+      popularity: Math.round(starsScore * 100),
+      activity: Math.round(commitScore * 100),
       maintainability: Math.round(dependencyScore * 100),
     };
-
     const weighted =
       (starsScore * WEIGHTS.STARS +
         forksScore * WEIGHTS.FORKS +
@@ -70,6 +69,13 @@ export class HealthCalculatorService {
             ? 'Moderate'
             : 'Poor';
 
-    return { score, label, metrics };
+    const fixedMetrics = {
+      security: metrics.security,
+      performance: 0,
+      reliability: 0,
+      maintainability: metrics.maintainability,
+    };
+
+    return { score, label, metrics: fixedMetrics };
   }
 }
