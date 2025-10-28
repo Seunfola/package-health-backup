@@ -10,7 +10,6 @@ import { HttpException } from '@nestjs/common';
 
 type PartialRepoHealth = Partial<RepoHealthDocument> & Record<string, any>;
 
-// Mocked Dependencies
 class MockGithubApiService {
   async fetchPublicRepositoryData() {
     return {
@@ -222,7 +221,6 @@ class MockRepositoryDataService {
   }
 }
 
-// TEST SUITE
 describe('RepoHealthService Functional', () => {
   let service: RepoHealthService;
   let calculator: MockHealthCalculatorService;
@@ -259,10 +257,11 @@ describe('RepoHealthService Functional', () => {
     }).compile();
 
     service = module.get<RepoHealthService>(RepoHealthService);
-    calculator = module.get<MockHealthCalculatorService>(HealthCalculatorService);
+    calculator = module.get<MockHealthCalculatorService>(
+      HealthCalculatorService,
+    );
   });
 
-  // Public Repo
   it('should analyze a public repository successfully', async () => {
     const result = await service.analyzePublicRepository('facebook', 'react');
     expect(result.repo_id).toBe('facebook/react');
@@ -270,53 +269,49 @@ describe('RepoHealthService Functional', () => {
     expect(result.bundle_size).toBe(2048);
   });
 
-  // Private Repo without Token
   it('should throw error if private repo is analyzed without token', async () => {
     await expect(
-      service.analyzePrivateRepository('owner', 'private-repo')
+      service.analyzePrivateRepository('owner', 'private-repo'),
     ).rejects.toThrow('Token is required for private repository');
+  });
 
-    // Private Repo with Token
-    it('should analyze private repository when token is provided', async () => {
-      const result = await service.analyzePrivateRepository(
-        'owner',
-        'private-repo',
-        'valid-token',
+  it('should analyze private repository when token is provided', async () => {
+    const result = await service.analyzePrivateRepository(
+      'owner',
+      'private-repo',
+      'valid-token',
+    );
+    expect(result.repo_id).toBe('owner/private-repo');
+    expect(result.overall_health.score).toBe(88);
+    expect(result.overall_health.metrics.security).toBe(90);
+  });
+
+  it('should call calculateHealthScore correctly', async () => {
+    const spy = jest.spyOn(calculator, 'calculateHealthScore');
+    await service.analyzePublicRepository('owner', 'repo');
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'public-repo' }),
+      expect.any(Array),
+      expect.any(Array),
+      85,
+    );
+  });
+
+  describe('Data Persistence', () => {
+    it('should maintain consistent repo health structure', async () => {
+      const result = await service.analyzePublicRepository(
+        'microsoft',
+        'vscode',
       );
-      expect(result.repo_id).toBe('owner/private-repo');
-      expect(result.overall_health.score).toBe(88);
-      expect(result.overall_health.metrics.security).toBe(90);
+      expect(result.repo_id).toBe('microsoft/vscode');
+      expect(result.overall_health.score).toBeGreaterThan(0);
     });
 
-    // Verify calculateHealthScore is called correctly
-    it('should call calculateHealthScore correctly', async () => {
-      const spy = jest.spyOn(calculator, 'calculateHealthScore');
-      await service.analyzePublicRepository('owner', 'repo');
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'public-repo' }),
-        expect.any(Array),
-        expect.any(Array),
-        85,
-      );
-    });
-
-    // Data Persistence Simulation
-    describe('Data Persistence', () => {
-      it('should maintain consistent repo health structure', async () => {
-        const result = await service.analyzePublicRepository(
-          'microsoft',
-          'vscode',
-        );
-        expect(result.repo_id).toBe('microsoft/vscode');
-        expect(result.overall_health.score).toBeGreaterThan(0);
-      });
-
-      it('should return valid repository stats', async () => {
-        const stats = await service.getStats();
-        expect(stats.totalRepos).toBeGreaterThan(0);
-        expect(stats.averageHealth).toBeGreaterThan(0);
-        expect(stats.healthDistribution.good).toBeGreaterThan(0);
-      });
+    it('should return valid repository stats', async () => {
+      const stats = await service.getStats();
+      expect(stats.totalRepos).toBeGreaterThan(0);
+      expect(stats.averageHealth).toBeGreaterThan(0);
+      expect(stats.healthDistribution.good).toBeGreaterThan(0);
     });
   });
-})
+});
