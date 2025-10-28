@@ -297,6 +297,35 @@ describe('RepoHealthService Functional', () => {
     );
   });
 
+  it('should include security alerts in public repo analysis', async () => {
+    const result = await service.analyzePublicRepository('owner', 'repo');
+    expect(result.security_alerts).toBe(2);
+    expect(result.overall_health.metrics.security).toBeGreaterThan(0);
+  });
+
+  it('should include security alerts in private repo analysis with token', async () => {
+    const result = await service.analyzePrivateRepository(
+      'owner',
+      'private-repo',
+      'valid-token',
+    );
+    expect(result.security_alerts).toBe(1);
+    expect(result.overall_health.metrics.security).toBe(90);
+  });
+
+
+  it('should reflect security alerts in health score calculation', async () => {
+    const spy = jest.spyOn(calculator, 'calculateHealthScore');
+    await service.analyzePublicRepository('owner', 'repo');
+    expect(spy).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Array),
+      expect.arrayContaining([{ severity: 'high' }, { severity: 'medium' }]),
+      expect.any(Number),
+    );
+  });
+
+
   describe('Data Persistence', () => {
     it('should maintain consistent repo health structure', async () => {
       const result = await service.analyzePublicRepository(
