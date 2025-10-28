@@ -18,8 +18,8 @@ export class GithubApiService {
   private readonly cache = new Map<string, CacheEntry<unknown>>();
   private readonly BASE_URL = 'https://api.github.com';
   private readonly CACHE_TTL = {
-    VISIBILITY: 60 * 60 * 1000, // 1 hour
-    REPO_DATA: 30 * 60 * 1000, // 30 minutes
+    VISIBILITY: 60 * 60 * 1000,
+    REPO_DATA: 30 * 60 * 1000,
   };
 
   constructor(private readonly httpService: HttpService) {}
@@ -52,7 +52,7 @@ export class GithubApiService {
         const response = await lastValueFrom(
           this.httpService.get<T>(url, {
             headers,
-            timeout: 10000, // 10 second timeout
+            timeout: 10000,
           }),
         );
 
