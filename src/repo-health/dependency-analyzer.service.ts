@@ -2,6 +2,8 @@ import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { exec } from 'child_process';
 import * as fs from 'fs';
 import { promisify } from 'util';
+import AdmZip from 'adm-zip';
+
 
 const execAsync = promisify(exec);
 
@@ -23,52 +25,115 @@ interface DependencyAnalysisResult {
 @Injectable()
 export class DependencyAnalyzerService {
   async analyzeDependencies(
-    deps: Record<string, string>,
+    input?: Record<string, string> | string | Express.Multer.File,
   ): Promise<DependencyAnalysisResult> {
-    for (const name of Object.keys(deps)) {
-      if (!/^[a-zA-Z0-9._@/-]+$/.test(name)) {
-        throw new HttpException(
-          `Invalid dependency name: ${name}`,
-          HttpStatus.BAD_REQUEST,
-        );
+    try {
+      let deps: Record<string, string>;
+
+      if (!input) {
+        return {
+          score: 100,
+          health: 'healthy',
+          totalVulns: 0,
+          totalOutdated: 0,
+          risky: [],
+          vulnerabilities: {},
+          outdated: [],
+          unstable: [],
+          bundleSize: 0,
+          licenseRisks: [],
+          popularity: 0,
+          daysBehind: 0,
+        };
       }
+
+      // Handle JSON string input
+      if (typeof input === 'string') {
+        try {
+          const parsed = JSON.parse(input);
+          if (!parsed || typeof parsed !== 'object') {
+            throw new Error();
+          }
+          deps = parsed as Record<string, string>;
+        } catch {
+          throw new HttpException('Invalid JSON input', HttpStatus.BAD_REQUEST);
+        }
+      }
+
+      else if ('buffer' in input) {
+        const file = input as Express.Multer.File;
+
+        if (file.originalname.endsWith('.json')) {
+          // Parse JSON file directly
+          try {
+            const parsed = JSON.parse(file.buffer.toString('utf-8'));
+            if (!parsed || typeof parsed !== 'object') throw new Error();
+            deps = parsed as Record<string, string>;
+          } catch {
+            throw new HttpException(
+              'Invalid JSON input',
+              HttpStatus.BAD_REQUEST,
+            );
+          }
+        } else {
+          throw new HttpException(
+            'Unsupported file type',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+      } else {
+        deps = input as Record<string, string>;
+      }
+
+      const depKeys = Object.keys(deps);
+      for (const name of depKeys) {
+        if (!/^[a-zA-Z0-9._@/-]+$/.test(name)) {
+          throw new HttpException(
+            `Invalid dependency name: ${name}`,
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+      }
+
+      const topDeps = depKeys.slice(0, 5);
+      const [githubVulns, npmData] = await Promise.all([
+        this.getGitHubAdvisories(topDeps),
+        this.getNpmBatch(topDeps),
+      ]);
+
+      const vulnerabilities = this.extractVulnerabilitiesFromGitHub(
+        githubVulns,
+        deps,
+      );
+      const risky = Object.keys(vulnerabilities);
+      const outdatedList = this.extractOutdated(npmData, deps);
+      const { score, health } = this.calculateHealthScore(
+        vulnerabilities,
+        outdatedList,
+      );
+      const unstable = this.detectUnstableDeps(deps);
+
+      return {
+        score,
+        health,
+        totalVulns: Object.keys(vulnerabilities).length,
+        totalOutdated: outdatedList.length,
+        risky,
+        vulnerabilities,
+        outdated: outdatedList,
+        unstable,
+        bundleSize: await this.getRealBundleSize(topDeps),
+        licenseRisks: this.getRealLicenseRisks(npmData),
+        popularity: await this.getRealPopularity(topDeps),
+        daysBehind: await this.getDaysBehind(outdatedList),
+      };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        (error as any)?.message || 'Dependency analysis failed',
+        HttpStatus.BAD_REQUEST,
+      );
     }
-
-    // GITHUB BATCH! (REPLACE ALL npm!)
-    const topDeps = Object.entries(deps).slice(0, 5);
-    const [githubVulns, npmData] = await Promise.all([
-      this.getGitHubAdvisories(topDeps.map(([n]) => n)),
-      this.getNpmBatch(topDeps.map(([n]) => n)),
-    ]);
-
-    // YOUR METHODS = SAME FORMAT!
-    const vulnerabilities = this.extractVulnerabilitiesFromGitHub(
-      githubVulns,
-      deps,
-    );
-    const risky = Object.keys(vulnerabilities);
-    const outdatedList = this.extractOutdated(npmData, deps);
-
-    const { score, health } = this.calculateHealthScore(
-      vulnerabilities,
-      outdatedList,
-    );
-    const unstable = this.detectUnstableDeps(deps);
-
-    return {
-      score,
-      health,
-      totalVulns: Object.keys(vulnerabilities).length,
-      totalOutdated: outdatedList.length,
-      risky,
-      vulnerabilities,
-      outdated: outdatedList,
-      unstable,
-      bundleSize: await this.getRealBundleSize(topDeps.map(([n]) => n)),
-      licenseRisks: this.getRealLicenseRisks(npmData),
-      popularity: await this.getRealPopularity(topDeps.map(([n]) => n)),
-      daysBehind: await this.getDaysBehind(outdatedList),
-    };
   }
 
   private async safeExec(

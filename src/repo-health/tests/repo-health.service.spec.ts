@@ -195,7 +195,7 @@ class MockRepositoryDataService {
   }
 }
 
-// ✅ TEST SUITE
+// TEST SUITE
 describe('RepoHealthService Integration', () => {
   let service: RepoHealthService;
   let healthCalculatorService: MockHealthCalculatorService;
