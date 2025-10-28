@@ -205,26 +205,14 @@ describe('RepoHealthService Integration', () => {
       providers: [
         RepoHealthService,
         { provide: GithubApiService, useClass: MockGithubApiService },
-        {
-          provide: DependencyAnalysisService,
-          useClass: MockDependencyAnalysisService,
-        },
-        {
-          provide: HealthCalculatorService,
-          useClass: MockHealthCalculatorService,
-        },
+        { provide: DependencyAnalysisService, useClass: MockDependencyAnalysisService },
+        { provide: HealthCalculatorService, useClass: MockHealthCalculatorService },
         { provide: RepositoryDataService, useClass: MockRepositoryDataService },
         {
           provide: getModelToken('RepoHealth'),
           useValue: {
             findOne: () => ({ exec: () => Promise.resolve(null) }),
-            find: () => ({
-              sort: () => ({
-                skip: () => ({
-                  limit: () => ({ exec: () => Promise.resolve([]) }),
-                }),
-              }),
-            }),
+            find: () => ({ sort: () => ({ skip: () => ({ limit: () => ({ exec: () => Promise.resolve([]) }) }) }) }),
             countDocuments: () => ({ exec: () => Promise.resolve(0) }),
           },
         },
@@ -232,28 +220,28 @@ describe('RepoHealthService Integration', () => {
     }).compile();
 
     service = module.get<RepoHealthService>(RepoHealthService);
-    healthCalculatorService = module.get<MockHealthCalculatorService>(
-      HealthCalculatorService,
-    );
-
-    it('should analyze public repository correctly', async () => {
-      const result = await service.analyzePublicRepository('owner', 'repo');
-      expect(result.overall_health.score).toBe(88);
-      expect(result.overall_health.metrics.security).toBeDefined();
-      expect(result.overall_health.metrics.performance).toBeDefined();
-      expect(result.overall_health.metrics.reliability).toBeDefined();
-      expect(result.overall_health.metrics.maintainability).toBeDefined();
-    });
-
-    it('should call calculateHealthScore with proper arguments', async () => {
-      const spy = jest.spyOn(healthCalculatorService, 'calculateHealthScore');
-      await service.analyzePublicRepository('owner', 'repo');
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'test-repo', stargazers_count: 100 }),
-        expect.any(Array),
-        expect.any(Array),
-        85,
-      );
-    });
+    healthCalculatorService = module.get<MockHealthCalculatorService>(HealthCalculatorService);
   });
-})
+
+  it('should analyze public repository correctly', async () => {
+    const result = await service.analyzePublicRepository('owner', 'repo');
+    expect(result.overall_health.score).toBe(88);
+    expect(result.overall_health.metrics.security).toBeDefined();
+    expect(result.overall_health.metrics.performance).toBeDefined();
+    expect(result.overall_health.metrics.reliability).toBeDefined();
+    expect(result.overall_health.metrics.maintainability).toBeDefined();
+  });
+
+  it('should call calculateHealthScore with proper arguments', async () => {
+    const spy = jest.spyOn(healthCalculatorService, 'calculateHealthScore');
+    await service.analyzePublicRepository('owner', 'repo');
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'test-repo', stargazers_count: 100 }),
+      expect.any(Array),
+      expect.any(Array),
+      85,
+    );
+  });
+});
+
+
