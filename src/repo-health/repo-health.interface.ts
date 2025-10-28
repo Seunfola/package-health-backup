@@ -64,6 +64,17 @@ export interface CommitActivityItem {
   days: number[];
 }
 
+export interface OverallHealth {
+  score: number;
+  label: string;
+  metrics: {
+    security: number;
+    performance: number;
+    reliability: number;
+    maintainability: number;
+  };
+}
+
 export interface SecurityAlert {
   id: string;
   number: number;
@@ -151,12 +162,20 @@ export interface RepositoryHealthData {
   overall_health: {
     score: number;
     label: string;
+    metrics: {
+      security: number;
+      performance: number;
+      reliability: number;
+      maintainability: number;
+      [key: string]: number;
+    };
   };
   bundle_size: number;
   license_risks: string[];
   popularity: number;
   days_behind: number;
 }
+
 
 // Custom exceptions
 export class RepositoryNotFoundException extends HttpException {

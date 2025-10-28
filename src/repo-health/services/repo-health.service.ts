@@ -27,7 +27,6 @@ export class RepoHealthService {
     private readonly repositoryDataService: RepositoryDataService,
   ) {}
 
-
   async analyzePublicRepository(
     owner: string,
     repo: string,
@@ -68,57 +67,77 @@ export class RepoHealthService {
     }
   }
 
-  async analyzePrivateRepository(
-    owner: string,
-    repo: string,
-    token: string,
-    file?: Express.Multer.File,
-    rawJson?: string | Record<string, unknown>,
-  ): Promise<RepoHealthDocument> {
+  async analyzePrivateRepository(owner: string, repo: string, token?: string) {
     try {
-      // Verify it's actually private
-      const visibility = await this.githubApiService.determineRepoVisibility(
+      if (!token) {
+        throw new HttpException(
+          'Token is required for private repository',
+          400,
+        );
+      }
+
+      const repoData = await this.githubApiService.fetchPrivateRepositoryData(
         owner,
         repo,
         token,
       );
-      if (visibility !== 'private') {
-        throw new HttpException(
-          `Repository '${owner}/${repo}' is not private. Use public analysis method.`,
-          HttpStatus.BAD_REQUEST,
+      const commitActivity =
+        await this.githubApiService.fetchPrivateCommitActivity(
+          owner,
+          repo,
+          token,
         );
-      }
+      const securityAlerts =
+        await this.githubApiService.fetchPrivateSecurityAlerts(
+          owner,
+          repo,
+          token,
+        );
+      const dependencyMetrics =
+        await this.dependencyAnalysisService.analyzeDependencies();
 
-      const [repoData, commitActivity, securityAlerts, dependencyAnalysis] =
-        await Promise.all([
-          this.githubApiService.fetchPrivateRepositoryData(owner, repo, token),
-          this.githubApiService.fetchPrivateCommitActivity(owner, repo, token),
-          this.githubApiService.fetchPrivateSecurityAlerts(owner, repo, token),
-          this.dependencyAnalysisService.analyzeDependencies(file, rawJson),
-        ]);
-
-      return await this.computeAndUpsertHealth(
-        owner,
-        repo,
+      const overallHealth = this.healthCalculatorService.calculateHealthScore(
         repoData,
         commitActivity,
         securityAlerts,
-        dependencyAnalysis,
+        dependencyMetrics.dependencyHealth,
+      );
+
+      const repoHealthData: RepositoryHealthData = {
+        repo_id: `${owner}/${repo}`,
+        owner,
+        repo,
+        name: repoData.name,
+        stars: repoData.stargazers_count,
+        forks: repoData.forks_count,
+        open_issues: repoData.open_issues_count,
+        last_pushed: new Date(repoData.pushed_at),
+        overall_health: {
+          score: overallHealth.score,
+          metrics: overallHealth.metrics,
+          label: 'Unknown',
+        },
+        commit_activity: commitActivity.map((c) => c.total),
+        security_alerts: securityAlerts.length,
+        dependency_health: dependencyMetrics.dependencyHealth,
+        risky_dependencies: dependencyMetrics.riskyDependencies,
+        bundle_size: dependencyMetrics.bundleSize,
+        license_risks: dependencyMetrics.licenseRisks,
+        popularity: dependencyMetrics.popularity,
+        days_behind: dependencyMetrics.daysBehind,
+      };
+
+      return await this.repositoryDataService.upsertRepoHealth(
+        `${owner}/${repo}`,
+        repoHealthData,
       );
     } catch (error) {
       this.logger.error(
         `Private repository analysis failed for ${owner}/${repo}:`,
         error,
       );
-
-      if (error instanceof HttpException) {
-        throw error;
-      }
-
-      throw new HttpException(
-        `Private repository analysis failed for ${owner}/${repo}`,
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to analyze private repository', 500);
     }
   }
 
@@ -139,14 +158,12 @@ export class RepoHealthService {
       if (!token) {
         throw new PrivateRepositoryException(owner, repo);
       }
-      return this.analyzePrivateRepository(owner, repo, token, file, rawJson);
+      return this.analyzePrivateRepository(owner, repo, token);
     }
 
     // Public repository - ignore token even if provided for consistency
     return this.analyzePublicRepository(owner, repo, file, rawJson);
   }
-
-  // ==================== URL-BASED METHODS ====================
 
   async analyzePublicRepoByUrl(
     url: string,
@@ -164,7 +181,7 @@ export class RepoHealthService {
     rawJson?: string | Record<string, unknown>,
   ): Promise<RepoHealthDocument> {
     const { owner, repo } = this.parseGitHubUrl(url);
-    return this.analyzePrivateRepository(owner, repo, token, file, rawJson);
+    return this.analyzePrivateRepository(owner, repo, token);
   }
 
   async analyzeByUrlAuto(
@@ -177,7 +194,6 @@ export class RepoHealthService {
     return this.analyzeRepositoryAuto(owner, repo, file, rawJson, token);
   }
 
-  // ==================== SIMPLIFIED CONTROLLER METHODS ====================
 
   async analyzeByUrl(url: string): Promise<RepoHealthDocument> {
     const { owner, repo } = this.parseGitHubUrl(url);
@@ -322,6 +338,16 @@ export class RepoHealthService {
     );
 
     const repo_id = `${owner}/${repo}`;
+
+    const dependencyHealthScore =
+      typeof dependencyAnalysis.dependencyHealth === 'object' &&
+      dependencyAnalysis.dependencyHealth !== null &&
+      'score' in dependencyAnalysis.dependencyHealth
+        ? (dependencyAnalysis.dependencyHealth as { score: number }).score
+        : typeof dependencyAnalysis.dependencyHealth === 'number'
+          ? dependencyAnalysis.dependencyHealth
+          : 0;
+
     const updateData: RepositoryHealthData = {
       repo_id,
       owner,
@@ -333,13 +359,18 @@ export class RepoHealthService {
       last_pushed: new Date(repoData.pushed_at),
       commit_activity: commitActivity.map((c) => c.total),
       security_alerts: securityAlerts.length,
-      dependency_health: (typeof dependencyAnalysis.dependencyHealth === 'object' && dependencyAnalysis.dependencyHealth !== null && 'score' in dependencyAnalysis.dependencyHealth)
-        ? (dependencyAnalysis.dependencyHealth as { score: number }).score
-        : (typeof dependencyAnalysis.dependencyHealth === 'number'
-          ? dependencyAnalysis.dependencyHealth
-          : 0),
+      dependency_health: dependencyHealthScore,
       risky_dependencies: dependencyAnalysis.riskyDependencies,
-      overall_health: overallHealth,
+      overall_health: {
+        score: overallHealth?.score ?? 0,
+        label: overallHealth?.label ?? 'Unknown',
+        metrics: {
+          security: overallHealth?.metrics?.security ?? 0,
+          performance: overallHealth?.metrics?.performance ?? 0,
+          reliability: overallHealth?.metrics?.reliability ?? 0,
+          maintainability: overallHealth?.metrics?.maintainability ?? 0,
+        },
+      },
       bundle_size: dependencyAnalysis.bundleSize,
       license_risks: dependencyAnalysis.licenseRisks,
       popularity: dependencyAnalysis.popularity,
@@ -380,8 +411,6 @@ export class RepoHealthService {
       HttpStatus.BAD_REQUEST,
     );
   }
-
-  // ==================== UTILITY METHODS ====================
 
   async processDependencies(
     file?: Express.Multer.File,

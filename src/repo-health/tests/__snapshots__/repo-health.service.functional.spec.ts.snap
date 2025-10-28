@@ -1,0 +1,3 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`RepoHealthService Functional should throw error if private repo is analyzed without token: Token is required for private repository 1`] = `"Token is required for private repository"`;

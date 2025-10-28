@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+
 @Schema({ _id: false })
 export class OverallHealth {
   @Prop({ type: Number, required: true })
@@ -7,7 +8,24 @@ export class OverallHealth {
 
   @Prop({ type: String, required: true })
   label!: string;
+
+  @Prop({
+    type: {
+      activity: { type: Number },
+      security: { type: Number },
+      maintenance: { type: Number },
+      popularity: { type: Number },
+      dependencies: { type: Number },
+    },
+  })
+  metrics!: {
+    security: number;
+    performance: number;
+    reliability: number;
+    maintainability: number;
+  };
 }
+
 export const OverallHealthSchema = SchemaFactory.createForClass(OverallHealth);
 
 @Schema({ timestamps: true })
@@ -51,8 +69,17 @@ export class RepoHealth extends Document {
   @Prop()
   risky_dependencies!: string[];
 
-  @Prop({ expires: 604800 })
-  createdAt!: Date;
+  @Prop()
+  bundle_size!: number;
+
+  @Prop({ type: [String] })
+  license_risks!: string[];
+
+  @Prop()
+  popularity!: number;
+
+  @Prop()
+  days_behind!: number;
 }
 
 export const RepoHealthSchema = SchemaFactory.createForClass(RepoHealth);
