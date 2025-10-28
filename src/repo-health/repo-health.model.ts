@@ -53,6 +53,21 @@ export class RepoHealth extends Document {
 
   @Prop({ expires: 604800 })
   createdAt!: Date;
+
+  @Prop()
+  bundle_size!: number;
+
+  @Prop({ type: [String] })
+  license_risks!: string[];
+
+  @Prop()
+  popularity!: number;
+
+  @Prop()
+  days_behind!: number;
+
+  @Prop()
+  updatedAt!: Date;
 }
 
 export const RepoHealthSchema = SchemaFactory.createForClass(RepoHealth);

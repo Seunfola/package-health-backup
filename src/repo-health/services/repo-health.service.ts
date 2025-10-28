@@ -27,7 +27,6 @@ export class RepoHealthService {
     private readonly repositoryDataService: RepositoryDataService,
   ) {}
 
-
   async analyzePublicRepository(
     owner: string,
     repo: string,
@@ -322,6 +321,16 @@ export class RepoHealthService {
     );
 
     const repo_id = `${owner}/${repo}`;
+
+    const dependencyHealthScore =
+      typeof dependencyAnalysis.dependencyHealth === 'object' &&
+      dependencyAnalysis.dependencyHealth !== null &&
+      'score' in dependencyAnalysis.dependencyHealth
+        ? (dependencyAnalysis.dependencyHealth as { score: number }).score
+        : typeof dependencyAnalysis.dependencyHealth === 'number'
+          ? dependencyAnalysis.dependencyHealth
+          : 0;
+
     const updateData: RepositoryHealthData = {
       repo_id,
       owner,
@@ -333,13 +342,18 @@ export class RepoHealthService {
       last_pushed: new Date(repoData.pushed_at),
       commit_activity: commitActivity.map((c) => c.total),
       security_alerts: securityAlerts.length,
-      dependency_health: (typeof dependencyAnalysis.dependencyHealth === 'object' && dependencyAnalysis.dependencyHealth !== null && 'score' in dependencyAnalysis.dependencyHealth)
-        ? (dependencyAnalysis.dependencyHealth as { score: number }).score
-        : (typeof dependencyAnalysis.dependencyHealth === 'number'
-          ? dependencyAnalysis.dependencyHealth
-          : 0),
+      dependency_health: dependencyHealthScore,
       risky_dependencies: dependencyAnalysis.riskyDependencies,
-      overall_health: overallHealth,
+      overall_health: {
+        score: overallHealth?.score ?? 0,
+        label: overallHealth?.label ?? 'Unknown',
+        metrics: {
+          security: overallHealth?.metrics?.security ?? 0,
+          performance: overallHealth?.metrics?.performance ?? 0,
+          reliability: overallHealth?.metrics?.reliability ?? 0,
+          maintainability: overallHealth?.metrics?.maintainability ?? 0,
+        },
+      },
       bundle_size: dependencyAnalysis.bundleSize,
       license_risks: dependencyAnalysis.licenseRisks,
       popularity: dependencyAnalysis.popularity,
@@ -381,7 +395,6 @@ export class RepoHealthService {
     );
   }
 
-  // ==================== UTILITY METHODS ====================
 
   async processDependencies(
     file?: Express.Multer.File,

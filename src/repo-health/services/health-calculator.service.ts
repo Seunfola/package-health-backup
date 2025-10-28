@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { CommitActivityItem, GitHubRepoResponse } from '../repo-health.interface';
-
+import {
+  CommitActivityItem,
+  GitHubRepoResponse,
+  OverallHealth,
+} from '../repo-health.interface';
 
 @Injectable()
 export class HealthCalculatorService {
@@ -9,7 +12,7 @@ export class HealthCalculatorService {
     commitActivity: CommitActivityItem[],
     securityAlerts: any[],
     dependencyHealth: number,
-  ): { score: number; label: string } {
+  ): OverallHealth {
     const WEIGHTS = {
       STARS: 0.2,
       FORKS: 0.15,
@@ -39,6 +42,13 @@ export class HealthCalculatorService {
     );
     const securityPenalty = securityAlerts.length > 0 ? 0.5 : 1;
 
+    const metrics = {
+      security: Math.round(securityPenalty * 100),
+      performance: Math.round(starsScore * 100),
+      reliability: Math.round(commitScore * 100),
+      maintainability: Math.round(dependencyScore * 100),
+    };
+
     const weighted =
       (starsScore * WEIGHTS.STARS +
         forksScore * WEIGHTS.FORKS +
@@ -50,6 +60,7 @@ export class HealthCalculatorService {
       100;
 
     const score = Math.round(Math.max(0, Math.min(weighted, 100)));
+
     const label =
       score >= 80
         ? 'Excellent'
@@ -59,6 +70,6 @@ export class HealthCalculatorService {
             ? 'Moderate'
             : 'Poor';
 
-    return { score, label };
+    return { score, label, metrics };
   }
 }
