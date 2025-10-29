@@ -194,7 +194,6 @@ export class RepoHealthService {
     return this.analyzeRepositoryAuto(owner, repo, file, rawJson, token);
   }
 
-
   async analyzeByUrl(url: string): Promise<RepoHealthDocument> {
     const { owner, repo } = this.parseGitHubUrl(url);
 
@@ -273,8 +272,6 @@ export class RepoHealthService {
     );
     return { visibility };
   }
-
-  // ==================== BATCH OPERATIONS ====================
 
   async analyzeMultipleRepositories(
     requests: Array<{
@@ -377,7 +374,11 @@ export class RepoHealthService {
       days_behind: dependencyAnalysis.daysBehind,
     };
 
-    return this.repositoryDataService.upsertRepoHealth(repo_id, updateData);
+    const result = await this.repositoryDataService.upsertRepoHealth(
+      repo_id,
+      updateData,
+    );
+    return result;
   }
 
   private parseGitHubUrl(url: string): { owner: string; repo: string } {
