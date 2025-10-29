@@ -26,18 +26,25 @@ export class UserPreferencesService {
     userId: string,
     updatePreferencesDto: UpdatePreferencesDto,
   ): Promise<UserPreferences> {
-    const preferences = await this.preferencesModel.findOneAndUpdate(
+    this.validatePreferences(updatePreferencesDto);
+
+    const allowedFields = ['dashboardMetrics', 'notificationPreferences'];
+    const sanitizedDto: any = {};
+
+    for (const field of allowedFields) {
+      if (field in updatePreferencesDto) {
+        sanitizedDto[field] = updatePreferencesDto[field];
+      }
+    }
+
+    const updated = await this.preferencesModel.findOneAndUpdate(
       { userId },
-      {
-        $set: {
-          dashboardMetrics: updatePreferencesDto.dashboardMetrics,
-          notificationPreferences: updatePreferencesDto.notificationPreferences,
-        },
-      },
+      { $set: sanitizedDto },
       { new: true, upsert: true, runValidators: true },
     );
 
-    return preferences;
+    if (!updated) throw new Error('Failed to update user preferences');
+    return updated;
   }
 
   async shouldSendNotification(
@@ -76,25 +83,18 @@ export class UserPreferencesService {
   getDefaultPreferences(): UserPreferences {
     return {
       userId: '',
-      ...this.getDefaults(), // Use the getDefaults method
+      ...this.getDefaults(),
       createdAt: new Date(),
       updatedAt: new Date(),
     } as UserPreferences;
   }
 
   async resetToDefaults(userId: string): Promise<UserPreferences> {
-    const defaultPreferences = new this.preferencesModel().toObject();
+    const defaults = this.getDefaults();
 
     return this.preferencesModel.findOneAndUpdate(
       { userId },
-      {
-        $set: {
-          dashboardMetrics: (defaultPreferences as UserPreferences)
-            .dashboardMetrics,
-          notificationPreferences: (defaultPreferences as UserPreferences)
-            .notificationPreferences,
-        },
-      },
+      { $set: defaults },
       { new: true, upsert: true, runValidators: true },
     );
   }
@@ -102,5 +102,27 @@ export class UserPreferencesService {
   async getSecurityAlertThreshold(userId: string): Promise<number> {
     const preferences = await this.getUserPreferences(userId);
     return preferences.notificationPreferences.securityAlertThreshold;
+  }
+
+  private validatePreferences(dto: UpdatePreferencesDto) {
+    const { dashboardMetrics, notificationPreferences } = dto;
+
+    if (dashboardMetrics) {
+      for (const key in dashboardMetrics) {
+        if (typeof dashboardMetrics[key] !== 'boolean') {
+          throw new TypeError(`Invalid type for dashboardMetrics.${key}`);
+        }
+      }
+    }
+
+    if (notificationPreferences) {
+      if (
+        typeof notificationPreferences.emailNotifications !== 'boolean' ||
+        typeof notificationPreferences.inAppNotifications !== 'boolean' ||
+        typeof notificationPreferences.securityAlertThreshold !== 'number'
+      ) {
+        throw new TypeError('Invalid types in notificationPreferences');
+      }
+    }
   }
 }
