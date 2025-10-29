@@ -310,18 +310,29 @@ export class BulkOperationResponseDto {
   @ApiPropertyOptional({ description: 'Number of affected notifications' })
   count?: number;
 
+  @ApiPropertyOptional({ description: 'Number of updated notifications' })
+  updated?: number;
+
+  @ApiPropertyOptional({ description: 'Number of deleted notifications' })
+  deleted?: number;
+
   constructor(response: {
     success: boolean;
     message: string;
     affectedIds?: string[];
     count?: number;
+    updated?: number;
+    deleted?: number;
   }) {
     this.success = response.success;
     this.message = response.message;
     this.affectedIds = response.affectedIds;
     this.count = response.count;
+    this.updated = response.updated;
+    this.deleted = response.deleted;
   }
 }
+
 
 export class BulkUpdateNotificationsDto {
   @ApiProperty({ type: [String], description: 'Notification IDs to update' })

@@ -1,9 +1,10 @@
 export const NOTIFICATION_TYPES = [
+  'SYSTEM_ALERT',
+  'SECURITY_ALERT',
   'SECURITY_VULNERABILITY',
   'DEPENDENCY_UPDATE',
   'NEW_ISSUE',
   'PULL_REQUEST',
-  'SYSTEM_ALERT',
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
