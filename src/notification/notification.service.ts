@@ -100,7 +100,7 @@ export class NotificationService {
             metadata: {
               alertCount: healthData.security_alerts,
               lastScanned: healthData.last_pushed,
-              userId,
+              ...(userId && { userId }),
             },
           });
         }
@@ -235,7 +235,7 @@ export class NotificationService {
       createdAt: new Date(),
       read: false,
     });
-
+    await this.cacheManager.del('notification:summary');
     return new NotificationResponseDto(created);
   }
 

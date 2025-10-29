@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { MongooseModule } from '@nestjs/mongoose';
-import mongoose from 'mongoose';
+import { MongooseModule, getConnectionToken } from '@nestjs/mongoose';
+import { Connection } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { NotificationService } from '../notification.service';
 import { NotificationSchema } from '../notification.model';
@@ -12,6 +12,7 @@ import { Cache } from 'cache-manager';
 describe('NotificationService (Integration)', () => {
   let service: NotificationService;
   let mongo: MongoMemoryServer;
+  let mongoConnection: Connection;
 
   beforeAll(async () => {
     mongo = await MongoMemoryServer.create();
@@ -66,17 +67,19 @@ describe('NotificationService (Integration)', () => {
     }).compile();
 
     service = module.get<NotificationService>(NotificationService);
+    mongoConnection = module.get<Connection>(getConnectionToken());
   });
 
+  // Clean DB between each test to avoid state bleed
   afterEach(async () => {
-    if (mongoose.connection?.db) {
-      await mongoose.connection.db.dropDatabase();
+    if (mongoConnection?.db) {
+      await mongoConnection.db.dropDatabase();
     }
   });
 
   afterAll(async () => {
-    if (mongoose.connection?.readyState) {
-      await mongoose.disconnect();
+    if (mongoConnection?.readyState) {
+      await mongoConnection.close();
     }
     await mongo.stop();
   });

@@ -10,7 +10,7 @@ describe('NotificationService (Security)', () => {
   let service: NotificationService;
   let mockNotificationModel: any;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     mockNotificationModel = {
       findByIdAndUpdate: jest.fn(),
       findByIdAndDelete: jest.fn(),
@@ -30,9 +30,7 @@ describe('NotificationService (Security)', () => {
     }).compile();
 
     service = module.get(NotificationService);
-    (service as any).notificationModel = mockNotificationModel;
   });
-
   it('should throw BadRequestException for invalid ObjectId', async () => {
     await expect(service.markAsRead('invalid_id')).rejects.toThrow(
       new BadRequestException('Invalid notification ID'),

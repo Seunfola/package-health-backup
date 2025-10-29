@@ -92,11 +92,9 @@ describe('NotificationService (Functional)', () => {
   it('should mark multiple notifications as read', async () => {
     const ids = [new mongoose.Types.ObjectId().toString()];
 
-    (service as any).notificationModel = {
-      updateMany: jest.fn().mockReturnValue({
-        exec: jest.fn().mockResolvedValue({ modifiedCount: ids.length }),
-      }),
-    };
+    notificationModel.updateMany = jest.fn().mockReturnValue({
+    exec: jest.fn().mockResolvedValue({ modifiedCount: ids.length }),
+  });
 
     const res = await service.markMultipleAsRead(ids);
 
@@ -112,16 +110,14 @@ describe('NotificationService (Functional)', () => {
 
 
   it('should delete multiple notifications successfully', async () => {
-    (service as any).notificationModel = {
-      deleteMany: jest.fn().mockReturnValue({
-        exec: jest.fn().mockResolvedValue({ deletedCount: 3 }),
-      }),
-    };
+    notificationModel.deleteMany = jest.fn().mockReturnValue({
+      exec: jest.fn().mockResolvedValue({ deletedCount: 1 }),
+    });
 
     const ids = [new mongoose.Types.ObjectId().toString()];
     const res = await service.deleteMultipleNotifications(ids);
 
     expect(res.success).toBe(true);
-    expect(res.deleted).toBe(3);
+    expect(res.deleted).toBe(1);
   });
 });

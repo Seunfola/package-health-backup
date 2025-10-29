@@ -298,22 +298,28 @@ export class BulkOperationResponseDto {
   @ApiProperty({ description: 'Whether the operation was successful' })
   success: boolean;
 
-  @ApiProperty({ description: 'Operation result message' })
+  @ApiProperty({
+    description: 'Human-readable summary of the operation result',
+  })
   message: string;
 
   @ApiPropertyOptional({
     type: [String],
-    description: 'Affected notification IDs',
+    description: 'IDs of notifications affected by the operation',
   })
   affectedIds?: string[];
 
-  @ApiPropertyOptional({ description: 'Number of affected notifications' })
+  @ApiPropertyOptional({
+    description:
+      'Total number of notifications affected (equal to updated + deleted, when both are present)',
+    deprecated: true,
+  })
   count?: number;
 
-  @ApiPropertyOptional({ description: 'Number of updated notifications' })
+  @ApiPropertyOptional({ description: 'Number of notifications updated' })
   updated?: number;
 
-  @ApiPropertyOptional({ description: 'Number of deleted notifications' })
+  @ApiPropertyOptional({ description: 'Number of notifications deleted' })
   deleted?: number;
 
   constructor(response: {
@@ -327,11 +333,13 @@ export class BulkOperationResponseDto {
     this.success = response.success;
     this.message = response.message;
     this.affectedIds = response.affectedIds;
-    this.count = response.count;
-    this.updated = response.updated;
-    this.deleted = response.deleted;
+    this.updated = response.updated ?? 0;
+    this.deleted = response.deleted ?? 0;
+    // Maintain backward compatibility:
+    this.count = response.count ?? this.updated + this.deleted;
   }
 }
+
 
 
 export class BulkUpdateNotificationsDto {
