@@ -7,18 +7,12 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, FilterQuery } from 'mongoose';
-import {
-  NotificationSummary as INotificationSummary,
-  NotificationQueryParams,
-  Notification as INotification,
-} from './notification.interface';
 import type { Cache } from 'cache-manager';
 import {
-  NOTIFICATION_TYPES,
-  NOTIFICATION_PRIORITIES,
-  NotificationPriority,
-  NotificationType,
-} from './notification.constants';
+  Notification as INotification,
+  NotificationSummary as INotificationSummary,
+  NotificationQueryParams,
+} from './notification.interface';
 import {
   BulkOperationResponseDto,
   CreateNotificationDto,
@@ -26,14 +20,23 @@ import {
   NotificationResponseDto,
   UpdateNotificationDto,
 } from './notification.dto';
-import { UserPreferencesService } from 'src/preference/preferences.service';
-import { UserPreferences } from 'src/preference/preferences.interface';
+import {
+  NOTIFICATION_TYPES,
+  NOTIFICATION_PRIORITIES,
+  NotificationPriority,
+  NotificationType,
+} from './notification.constants';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { RepoHealthService } from 'src/repo-health/services/repo-health.service';
+import { UserPreferencesService } from 'src/preference/preferences.service';
+import { UserPreferences } from 'src/preference/preferences.interface';
 
 @Injectable()
 export class NotificationService {
   private readonly logger = new Logger(NotificationService.name);
+
+  private static readonly CACHE_TTL = 120;
+  private static readonly DEFAULT_CLEANUP_DAYS = 30;
 
   constructor(
     @InjectModel('Notification')
@@ -43,15 +46,30 @@ export class NotificationService {
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
-  // GENERATE NOTIFICATIONS FOR A REPO
+  private validateObjectId(id: string, label = 'ID') {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException(`Invalid ${label}`);
+    }
+  }
+
+  private isValidNotificationType(type: string): type is NotificationType {
+    return NOTIFICATION_TYPES.includes(type as NotificationType);
+  }
+
+  private isValidNotificationPriority(
+    priority: string,
+  ): priority is NotificationPriority {
+    return NOTIFICATION_PRIORITIES.includes(priority as NotificationPriority);
+  }
+
   async generateNotificationsForRepo(
     owner: string,
     repo: string,
     userId?: string,
   ): Promise<NotificationResponseDto[]> {
     const notifications: CreateNotificationDto[] = [];
-    const repoUrl = `https://github.com/${owner}/${repo}`;
-    const repoId = `${owner}/${repo}`;
+    const repoUrl = `https://github.com/${owner.trim()}/${repo.trim()}`;
+    const repoId = `${owner.trim()}/${repo.trim()}`;
 
     try {
       const healthData = await this.repoHealthService.findRepoHealth(
@@ -65,12 +83,11 @@ export class NotificationService {
           await this.userPreferencesService.getUserPreferences(userId);
       }
 
-      // Security alerts - check user preferences
+      // Security Alert
       if (healthData.security_alerts > 0) {
-        const shouldShowSecurityAlert =
+        const showSecurity =
           !userPreferences || userPreferences.dashboardMetrics.securityAlerts;
-
-        if (shouldShowSecurityAlert) {
+        if (showSecurity) {
           notifications.push({
             type: 'SECURITY_VULNERABILITY',
             repository: repoId,
@@ -83,19 +100,18 @@ export class NotificationService {
             metadata: {
               alertCount: healthData.security_alerts,
               lastScanned: healthData.last_pushed,
-              userId: userId,
+              ...(userId && { userId }),
             },
           });
         }
       }
 
-      // Dependency health - check user preferences
+      // Dependency Health
       if (healthData.dependency_health < 70) {
-        const shouldShowDependencyAlert =
+        const showDependency =
           !userPreferences ||
           userPreferences.dashboardMetrics.dependencyVulnerabilities;
-
-        if (shouldShowDependencyAlert) {
+        if (showDependency) {
           const priority: NotificationPriority =
             healthData.dependency_health < 40 ? 'high' : 'medium';
           notifications.push({
@@ -112,13 +128,12 @@ export class NotificationService {
             metadata: {
               healthScore: healthData.dependency_health,
               riskyDependencies: healthData.risky_dependencies || [],
-              userId: userId,
+              userId,
             },
           });
         }
       }
 
-      // Overall health - check user preferences
       let overallScore: number | null = null;
       let overallLabel: string | undefined;
 
@@ -133,44 +148,40 @@ export class NotificationService {
                 ? 'Moderate'
                 : 'Poor';
       } else if (
-        healthData.overall_health &&
         typeof healthData.overall_health === 'object' &&
         healthData.overall_health !== null
       ) {
-        const healthObj = healthData.overall_health as {
-          score?: unknown;
-          label?: unknown;
+        const obj = healthData.overall_health as {
+          score?: number;
+          label?: string;
         };
-        overallScore =
-          typeof healthObj.score === 'number' ? healthObj.score : null;
-        overallLabel =
-          typeof healthObj.label === 'string' ? healthObj.label : undefined;
+        overallScore = obj.score ?? null;
+        overallLabel = obj.label;
       }
 
       if (overallScore !== null && overallScore < 60) {
-        const shouldShowHealthAlert =
+        const showHealth =
           !userPreferences || userPreferences.dashboardMetrics.codeQualityScore;
-
-        if (shouldShowHealthAlert) {
+        if (showHealth) {
           notifications.push({
             type: 'SYSTEM_ALERT',
             repository: repoId,
             repositoryUrl: repoUrl,
             title: `Repository Health: ${overallScore}% - ${overallLabel ?? 'Needs Improvement'}`,
-            description: `Your repository health score indicates areas that need improvement for better maintainability and security.`,
+            description:
+              'Your repository health score indicates areas that need improvement.',
             priority: overallScore < 40 ? 'high' : 'medium',
             detailsUrl: repoUrl,
             read: false,
             metadata: {
               healthScore: overallScore,
               healthLabel: overallLabel,
-              userId: userId,
+              userId,
             },
           });
         }
       }
 
-      // Inactivity alert - this is always shown (system-level alert)
       const lastPushed = new Date(healthData.last_pushed);
       const daysSinceLastPush =
         (Date.now() - lastPushed.getTime()) / (1000 * 60 * 60 * 24);
@@ -182,14 +193,14 @@ export class NotificationService {
           title: 'Repository Inactivity Alert',
           description: `This repository hasn't been updated in ${Math.floor(
             daysSinceLastPush,
-          )} days. Consider archiving if no longer maintained.`,
+          )} days.`,
           priority: 'low',
           detailsUrl: repoUrl,
           read: false,
           metadata: {
             daysSinceLastPush: Math.floor(daysSinceLastPush),
             lastPushDate: lastPushed,
-            userId: userId,
+            userId,
           },
         });
       }
@@ -215,7 +226,19 @@ export class NotificationService {
 
     return [];
   }
-  // GET USER NOTIFICATIONS
+
+  async createNotification(
+    createDto: CreateNotificationDto,
+  ): Promise<NotificationResponseDto> {
+    const created = await this.notificationModel.create({
+      ...createDto,
+      createdAt: new Date(),
+      read: false,
+    });
+    await this.cacheManager.del('notification:summary');
+    return new NotificationResponseDto(created);
+  }
+
   async getUserNotifications(
     options?: NotificationQueryParams | NotificationQueryDto,
   ): Promise<NotificationResponseDto[]> {
@@ -226,7 +249,6 @@ export class NotificationService {
       offset = 0,
       limit = 20,
     } = options ?? {};
-
     const query: FilterQuery<INotification> = {};
 
     if (unreadOnly) query.read = false;
@@ -252,11 +274,11 @@ export class NotificationService {
     }
   }
 
-  // GET SUMMARY
   async getNotificationSummary(): Promise<INotificationSummary> {
     const cacheKey = 'notification:summary';
     const cached = await this.cacheManager.get<INotificationSummary>(cacheKey);
     if (cached) return cached;
+
     try {
       const [total, unread, byTypeRaw, byPriorityRaw] = await Promise.all([
         this.notificationModel.countDocuments(),
@@ -269,242 +291,167 @@ export class NotificationService {
         ]),
       ]);
 
-      // Initialize with all types set to 0
-      const byType: Record<NotificationType, number> = {
-        SECURITY_VULNERABILITY: 0,
-        DEPENDENCY_UPDATE: 0,
-        NEW_ISSUE: 0,
-        PULL_REQUEST: 0,
-        SYSTEM_ALERT: 0,
-      };
+      const byType = Object.fromEntries(
+        NOTIFICATION_TYPES.map((t) => [t, 0]),
+      ) as Record<NotificationType, number>;
+      const byPriority = Object.fromEntries(
+        NOTIFICATION_PRIORITIES.map((p) => [p, 0]),
+      ) as Record<NotificationPriority, number>;
 
-      byTypeRaw.forEach((item) => {
-        if (this.isValidNotificationType(item._id)) {
-          byType[item._id] = item.count;
-        }
+      byTypeRaw.forEach((t) => {
+        if (this.isValidNotificationType(t._id)) byType[t._id] = t.count;
+      });
+      byPriorityRaw.forEach((p) => {
+        if (this.isValidNotificationPriority(p._id))
+          byPriority[p._id] = p.count;
       });
 
-      // Initialize with all priorities set to 0
-      const byPriority: Record<NotificationPriority, number> = {
-        low: 0,
-        medium: 0,
-        high: 0,
-        critical: 0,
-      };
-
-      byPriorityRaw.forEach((item) => {
-        if (this.isValidNotificationPriority(item._id)) {
-          byPriority[item._id] = item.count;
-        }
-      });
       const summary = { total, unread, byType, byPriority };
-      await this.cacheManager.set(cacheKey, summary, 60 * 2);
-
+      await this.cacheManager.set(
+        cacheKey,
+        summary,
+        NotificationService.CACHE_TTL,
+      );
       return summary;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      this.logger.error('Failed to get notification summary', { message });
+    } catch (err) {
+      this.logger.error('Failed to get notification summary', err);
       throw new BadRequestException('Failed to get notification summary');
     }
   }
 
-  // TYPE GUARDS
-  private isValidNotificationType(type: string): type is NotificationType {
-    return NOTIFICATION_TYPES.includes(type as NotificationType);
-  }
-
-  private isValidNotificationPriority(
-    priority: string,
-  ): priority is NotificationPriority {
-    return NOTIFICATION_PRIORITIES.includes(priority as NotificationPriority);
-  }
-
-  // MARK AS READ
-  async markAsRead(notificationId: string): Promise<NotificationResponseDto> {
-    if (!Types.ObjectId.isValid(notificationId)) {
-      throw new BadRequestException('Invalid notification ID');
-    }
-
-    const notification = await this.notificationModel
-      .findByIdAndUpdate(notificationId, { read: true }, { new: true })
-      .lean()
-      .exec();
-
-    if (!notification) {
-      throw new NotFoundException(
-        `Notification with ID ${notificationId} not found`,
-      );
-    }
-    return new NotificationResponseDto(notification);
-  }
-
-  // MARK ALL AS READ
-  async markAllAsRead(): Promise<{ modifiedCount: number }> {
-    const result = await this.notificationModel
-      .updateMany({ read: false }, { read: true })
-      .exec();
-    return { modifiedCount: result.modifiedCount };
-  }
-
-  // DELETE
-  async deleteNotification(notificationId: string): Promise<void> {
-    if (!Types.ObjectId.isValid(notificationId)) {
-      throw new BadRequestException('Invalid notification ID');
-    }
-
-    const result = await this.notificationModel
-      .findByIdAndDelete(notificationId)
-      .exec();
-    if (!result) {
-      throw new NotFoundException(
-        `Notification with ID ${notificationId} not found`,
-      );
-    }
-  }
-
-  async clearAllNotifications(): Promise<{ deletedCount: number }> {
-    const result = await this.notificationModel.deleteMany({}).exec();
-    return { deletedCount: result.deletedCount };
-  }
-
-  async createNotification(
-    dto: CreateNotificationDto,
-  ): Promise<NotificationResponseDto> {
-    const notification = new this.notificationModel({
-      ...dto,
-      createdAt: new Date(),
-    });
-    const saved = await notification.save();
-    return new NotificationResponseDto(saved.toObject());
-  }
-
-  async updateNotification(
-    notificationId: string,
-    dto: UpdateNotificationDto,
-  ): Promise<NotificationResponseDto> {
-    if (!Types.ObjectId.isValid(notificationId)) {
-      throw new BadRequestException('Invalid notification ID');
-    }
-
-    const notification = await this.notificationModel
-      .findByIdAndUpdate(notificationId, dto, { new: true })
-      .lean()
-      .exec();
-
-    if (!notification) {
-      throw new NotFoundException(
-        `Notification with ID ${notificationId} not found`,
-      );
-    }
-    return new NotificationResponseDto(notification);
-  }
-
-  // GET NOTIFICATION BY ID
-  async getNotificationById(
-    notificationId: string,
-  ): Promise<NotificationResponseDto> {
-    if (!Types.ObjectId.isValid(notificationId)) {
-      throw new BadRequestException('Invalid notification ID');
-    }
-
-    const notification = await this.notificationModel
-      .findById(notificationId)
-      .lean()
-      .exec();
-
-    if (!notification) {
-      throw new NotFoundException(
-        `Notification with ID ${notificationId} not found`,
-      );
-    }
-    return new NotificationResponseDto(notification);
-  }
-
-  async markMultipleAsRead(
-    notificationIds: string[],
-  ): Promise<BulkOperationResponseDto> {
-    // Validate all IDs
-    const invalidIds = notificationIds.filter(
-      (id) => !Types.ObjectId.isValid(id),
-    );
-    if (invalidIds.length > 0) {
-      throw new BadRequestException(
-        `Invalid notification IDs: ${invalidIds.join(', ')}`,
-      );
-    }
-
-    const result = await this.notificationModel
-      .updateMany({ _id: { $in: notificationIds } }, { read: true })
-      .exec();
-
-    return new BulkOperationResponseDto({
-      success: true,
-      message: `Successfully marked ${result.modifiedCount} notifications as read`,
-      affectedIds: notificationIds,
-      count: result.modifiedCount,
-    });
-  }
-
-  async deleteMultipleNotifications(
-    notificationIds: string[],
-  ): Promise<BulkOperationResponseDto> {
-    // Validate all IDs
-    const invalidIds = notificationIds.filter(
-      (id) => !Types.ObjectId.isValid(id),
-    );
-    if (invalidIds.length > 0) {
-      throw new BadRequestException(
-        `Invalid notification IDs: ${invalidIds.join(', ')}`,
-      );
-    }
-
-    const result = await this.notificationModel
-      .deleteMany({ _id: { $in: notificationIds } })
-      .exec();
-
-    return new BulkOperationResponseDto({
-      success: true,
-      message: `Successfully deleted ${result.deletedCount} notifications`,
-      affectedIds: notificationIds,
-      count: result.deletedCount,
-    });
-  }
-
-  // NOTIFICATION STATISTICS
   async getUnreadCount(): Promise<{ count: number }> {
     const count = await this.notificationModel.countDocuments({ read: false });
     return { count };
   }
 
-  async getNotificationsByRepository(
-    repository: string,
-  ): Promise<NotificationResponseDto[]> {
-    const notifications = await this.notificationModel
-      .find({ repository })
-      .sort({ createdAt: -1 })
+  async markAsRead(id: string): Promise<NotificationResponseDto> {
+    this.validateObjectId(id, 'notification ID');
+    const updated = await this.notificationModel
+      .findByIdAndUpdate(id, { read: true }, { new: true })
       .lean()
       .exec();
 
-    return notifications.map((n) => new NotificationResponseDto(n));
+    if (!updated)
+      throw new NotFoundException(`Notification with ID ${id} not found`);
+    await this.cacheManager.del('notification:summary');
+    return new NotificationResponseDto(updated);
   }
 
-  // ADVANCED FILTERING
+  async markAllAsRead(): Promise<{ modifiedCount: number }> {
+    const result = await this.notificationModel
+      .updateMany({ read: false }, { read: true })
+      .exec();
+    await this.cacheManager.del('notification:summary');
+    return { modifiedCount: result.modifiedCount };
+  }
+
+  async deleteNotification(id: string): Promise<void> {
+    this.validateObjectId(id, 'notification ID');
+    const deleted = await this.notificationModel.findByIdAndDelete(id).exec();
+    if (!deleted)
+      throw new NotFoundException(`Notification with ID ${id} not found`);
+    await this.cacheManager.del('notification:summary');
+  }
+
+  async clearAllNotifications(): Promise<{ deletedCount: number }> {
+    const result = await this.notificationModel.deleteMany({}).exec();
+    await this.cacheManager.del('notification:summary');
+    return { deletedCount: result.deletedCount };
+  }
+
+  async markMultipleAsRead(ids: string[]): Promise<BulkOperationResponseDto> {
+    if (!ids.length) {
+      return new BulkOperationResponseDto({
+        success: true,
+        message: 'No notifications to mark as read',
+        affectedIds: [],
+        updated: 0,
+      });
+    }
+
+    // Validate IDs
+    ids.forEach((id) => this.validateObjectId(id));
+
+    // Perform bulk update
+    const result = await this.notificationModel
+      .updateMany({ _id: { $in: ids } }, { read: true })
+      .exec();
+
+    await this.cacheManager.del('notification:summary');
+
+    return new BulkOperationResponseDto({
+      success: true,
+      message: `Marked ${result.modifiedCount} notifications as read`,
+      affectedIds: ids,
+      updated: result.modifiedCount,
+    });
+  }
+
+  async deleteMultipleNotifications(
+    ids: string[],
+  ): Promise<BulkOperationResponseDto> {
+    ids.forEach((id) => this.validateObjectId(id));
+    const result = await this.notificationModel
+      .deleteMany({ _id: { $in: ids } })
+      .exec();
+    await this.cacheManager.del('notification:summary');
+    return new BulkOperationResponseDto({
+      success: true,
+      message: `Deleted ${result.deletedCount} notifications`,
+      affectedIds: ids,
+      deleted: result.deletedCount,
+    });
+  }
+
+  async updateNotification(
+    id: string,
+    dto: UpdateNotificationDto,
+  ): Promise<NotificationResponseDto> {
+    this.validateObjectId(id, 'notification ID');
+    const updated = await this.notificationModel
+      .findByIdAndUpdate(id, dto, { new: true })
+      .lean()
+      .exec();
+    if (!updated)
+      throw new NotFoundException(`Notification with ID ${id} not found`);
+    await this.cacheManager.del('notification:summary');
+    return new NotificationResponseDto(updated);
+  }
+
+  async getNotificationById(id: string): Promise<NotificationResponseDto> {
+    this.validateObjectId(id, 'notification ID');
+    const found = await this.notificationModel.findById(id).lean().exec();
+    if (!found)
+      throw new NotFoundException(`Notification with ID ${id} not found`);
+    return new NotificationResponseDto(found);
+  }
+
+  async getNotificationsByRepository(
+    repo: string,
+  ): Promise<NotificationResponseDto[]> {
+    const results = await this.notificationModel
+      .find({ repository: repo })
+      .sort({ createdAt: -1 })
+      .lean()
+      .exec();
+    return results.map((r) => new NotificationResponseDto(r));
+  }
+
   async searchNotifications(
-    searchTerm: string,
+    term: string,
     options?: NotificationQueryDto,
   ): Promise<NotificationResponseDto[]> {
     const { limit = 20, offset = 0, ...filters } = options ?? {};
-
     const query: FilterQuery<INotification> = {
       ...filters,
       $or: [
-        { title: { $regex: searchTerm, $options: 'i' } },
-        { description: { $regex: searchTerm, $options: 'i' } },
-        { repository: { $regex: searchTerm, $options: 'i' } },
+        { title: { $regex: term, $options: 'i' } },
+        { description: { $regex: term, $options: 'i' } },
+        { repository: { $regex: term, $options: 'i' } },
       ],
     };
 
-    const notifications = await this.notificationModel
+    const results = await this.notificationModel
       .find(query)
       .sort({ createdAt: -1 })
       .skip(Math.max(offset, 0))
@@ -512,26 +459,23 @@ export class NotificationService {
       .lean()
       .exec();
 
-    return notifications.map((n) => new NotificationResponseDto(n));
+    return results.map((r) => new NotificationResponseDto(r));
   }
 
-  // NOTIFICATION CLEANUP
   async cleanupOldNotifications(
-    daysOld: number = 30,
+    daysOld = NotificationService.DEFAULT_CLEANUP_DAYS,
   ): Promise<{ deletedCount: number }> {
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysOld);
 
     const result = await this.notificationModel
-      .deleteMany({
-        createdAt: { $lt: cutoffDate },
-        read: true,
-      })
+      .deleteMany({ createdAt: { $lt: cutoff }, read: true })
       .exec();
 
     this.logger.log(
       `Cleaned up ${result.deletedCount} notifications older than ${daysOld} days`,
     );
+    await this.cacheManager.del('notification:summary');
     return { deletedCount: result.deletedCount };
   }
 
@@ -543,52 +487,36 @@ export class NotificationService {
       const preferences =
         await this.userPreferencesService.getUserPreferences(userId);
 
-      for (const notification of notifications) {
-        // In-app notifications (always stored in DB)
+      for (const n of notifications) {
         if (preferences.notificationPreferences.inAppNotifications) {
-          // Notification is already stored in database for in-app display
-          this.logger.log(`In-app notification created for user ${userId}`);
+          this.logger.log(`In-app notification stored for user ${userId}`);
         }
 
-        // Email notifications
         if (preferences.notificationPreferences.emailNotifications) {
-          await this.sendEmailNotification(userId, notification);
+          await this.sendEmailNotification(userId, n);
         }
 
-        // Check security threshold
-        if (
-          (notification as { type?: string }).type === 'SECURITY_VULNERABILITY'
-        ) {
-          const securityThreshold =
+        if (n.type === 'SECURITY_VULNERABILITY') {
+          const threshold =
             preferences.notificationPreferences.securityAlertThreshold;
-          const alertCount =
-            (notification as { metadata?: { alertCount?: number } }).metadata
-              ?.alertCount ?? 0;
-
-          if (alertCount > securityThreshold) {
-            this.logger.log(
+          const alertCount = n.metadata?.alertCount ?? 0;
+          if (alertCount > threshold) {
+            this.logger.warn(
               `High priority security alert for user ${userId}: ${alertCount} vulnerabilities`,
             );
-            // Could trigger additional actions like Slack/webhook notifications
           }
         }
       }
     } catch (error) {
       this.logger.error(
-        'Error sending notifications based on preferences:',
+        'Error sending notifications based on preferences',
         error,
       );
     }
   }
 
-  private async sendEmailNotification(
-    userId: string,
-    notification: { title: string },
-  ) {
-    // Implement your email sending logic here
-    await Promise.resolve(); // Placeholder for actual async email sending logic
-    this.logger.log(
-      `Would send email to user ${userId} for notification: ${notification.title}`,
-    );
+  private async sendEmailNotification(userId: string, n: { title: string }) {
+    await Promise.resolve();
+    this.logger.log(`Would send email to user ${userId} for: ${n.title}`);
   }
 }

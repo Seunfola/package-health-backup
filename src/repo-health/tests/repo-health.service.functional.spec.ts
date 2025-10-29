@@ -275,6 +275,12 @@ describe('RepoHealthService Functional', () => {
     ).rejects.toThrow('Token is required for private repository');
   });
 
+  it('matches the repo health snapshot', async () => {
+    const result = await service.analyzePublicRepository('owner', 'repo');
+    expect(result).toMatchSnapshot();
+  });
+
+
   it('should analyze private repository when token is provided', async () => {
     const result = await service.analyzePrivateRepository(
       'owner',
