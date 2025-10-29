@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { RepoHealthController } from './repo-health.controller';
-import { RepoHealthService } from './services/repo-health.service';
+import { RepoHealthController } from '../repo-health.controller';
+import { RepoHealthService } from '../services/repo-health.service';
+
 
 describe('RepoHealthController', () => {
   let controller: RepoHealthController;
