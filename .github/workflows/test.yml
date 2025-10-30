@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -24,10 +24,10 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'pnpm'
 
-      - name: Enable pnpm via Corepack
-        run: |
-          corepack enable
-          corepack prepare pnpm@latest --activate
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -40,3 +40,9 @@ jobs:
 
       - name: Run coverage
         run: pnpm test:cov
+
+      - name: Verify pnpm
+        run: |
+          which pnpm || echo "pnpm not found"
+          pnpm --version || echo "pnpm --version failed"
+          pnpm --version || echo "pnpm --version failed"
