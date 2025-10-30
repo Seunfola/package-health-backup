@@ -22,12 +22,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'pnpm'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v2
         with:
           version: latest
+
+      - name: Verify pnpm
+        run: |
+          echo "PATH=$PATH"
+          which pnpm
+          pnpm --version
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -40,9 +45,3 @@ jobs:
 
       - name: Run coverage
         run: pnpm test:cov
-
-      - name: Verify pnpm
-        run: |
-          which pnpm || echo "pnpm not found"
-          pnpm --version || echo "pnpm --version failed"
-          pnpm --version || echo "pnpm --version failed"
