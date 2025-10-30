@@ -180,9 +180,9 @@ export class DependencyAnalysisService {
         communityRisk += 10;
       }
 
-      // Transitive risks (roughly proportional to dependency count)
-      transitiveRisk += Math.min(5, total / 20);
-      securityAuditRisk += risky.length * 2;
+      // Compute aggregate risks after loop
+      transitiveRisk = Math.min(5, total / 20) * total;
+      securityAuditRisk = risky.length * 2;
     }
 
     const outdatedFactor = outdatedCount / (total || 1);

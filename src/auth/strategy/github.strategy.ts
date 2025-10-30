@@ -3,8 +3,6 @@ import { PassportStrategy } from '@nestjs/passport';
 import { Strategy } from 'passport-github2';
 import { GitHubValidateResult } from '../auth.interface';
 
-
-
 @Injectable()
 export class GitHubStrategy extends PassportStrategy(Strategy, 'github') {
   constructor() {
@@ -32,12 +30,14 @@ export class GitHubStrategy extends PassportStrategy(Strategy, 'github') {
     _refreshToken: string,
     profile: Record<string, unknown>,
   ): GitHubValidateResult {
+    // Convert id to string if present, else default to ''
     const rawId = profile?.id;
     const githubId =
       typeof rawId === 'string' || typeof rawId === 'number'
         ? String(rawId)
         : '';
 
+    // Determine username
     const username =
       typeof (profile as any).username === 'string'
         ? (profile as any).username

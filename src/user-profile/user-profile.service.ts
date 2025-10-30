@@ -92,14 +92,14 @@ export class UserProfileService {
       );
 
       const data = response?.data;
-      if (!data || typeof data !== 'object')
+      if (!data || typeof data !== 'object' || Array.isArray(data))
         throw new Error('Invalid response from GitHub API');
 
       return {
-        profile_picture_url: this.stripMarkdown(data.avatar_url || ''),
-        github_url: this.stripMarkdown(data.html_url || ''),
-        name: this.sanitizeHtml(data.name || ''),
-        bio: this.sanitizeHtml(data.bio || ''),
+        profile_picture_url: this.stripMarkdown(data.avatar_url),
+        github_url: this.stripMarkdown(data.html_url),
+        name: this.sanitizeHtml(data.name),
+        bio: this.sanitizeHtml(data.bio),
       };
     } catch (error: unknown) {
       this.handleError('Fetching GitHub profile', error);

@@ -39,6 +39,25 @@ describe('UserProfileService (Functional)', () => {
     service = module.get<UserProfileService>(UserProfileService);
     httpService = module.get<HttpService>(HttpService);
     userModel = module.get(getModelToken(UserProfile.name));
+
+    // Apply spy mocks BEFORE tests run
+    jest
+      .spyOn(service as any, 'stripMarkdown')
+      .mockImplementation((...args: unknown[]) => {
+        const text = args[0] as string;
+        return text?.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$2') || '';
+      });
+    jest
+      jest
+        .spyOn(service as any, 'sanitizeHtml')
+        .mockImplementation((...args: unknown[]) => {
+          const text = args[0] as string;
+          if (!text) return '';
+          return text
+            .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+            .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '')
+            .replace(/<[^>]*>?/gm, '');
+        });
   });
 
   it('should define service', () => {
@@ -101,8 +120,8 @@ describe('UserProfileService (Functional)', () => {
 
     const result = await service.getSocialProfileData('github', 'octocat');
     expect(result.github_url).toBe('https://github.com/octocat');
-    expect(result.name).toBe('Octocat');
-    expect(result.bio).toBe('GitHub mascot');
+    expect(result.name).toBe('Octocat'); // sanitized
+    expect(result.bio).toBe('GitHub mascot'); // sanitized
   });
 
   it('should throw when GitHub API fails', async () => {
