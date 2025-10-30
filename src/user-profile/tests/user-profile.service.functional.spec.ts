@@ -1,104 +1,122 @@
-import { Injectable } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { getModelToken } from '@nestjs/mongoose';
 import { HttpService } from '@nestjs/axios';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
-import { firstValueFrom } from 'rxjs';
+import { of, throwError } from 'rxjs';
+import { UserProfileService } from '../user-profile.service';
 import { UserProfile } from '../user-profile.model';
 
-@Injectable()
-export class UserProfileService {
-  constructor(
-    @InjectModel(UserProfile.name) private userModel: Model<UserProfile>,
-    private readonly httpService: HttpService,
-  ) {}
+describe('UserProfileService (Functional)', () => {
+  let service: UserProfileService;
+  let httpService: HttpService;
+  let userModel: any;
 
-  async create(data: any) {
-    const created = new this.userModel({
+  beforeAll(async () => {
+    // Suppress console.error during tests
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    // Mock HttpService
+    const mockHttpService = { get: jest.fn() };
+
+    // Mock Mongoose model
+    const mockUserModel: any = jest.fn().mockImplementation((data) => ({
       ...data,
-      email: this.stripMarkdown(data.email),
-      createdAt: new Date(),
+      save: jest.fn().mockResolvedValue(data),
+    }));
+    mockUserModel.find = jest.fn().mockReturnThis();
+    mockUserModel.findOne = jest.fn().mockReturnThis();
+    mockUserModel.findByIdAndUpdate = jest.fn().mockReturnThis();
+    mockUserModel.exec = jest.fn().mockResolvedValue([]);
+    mockUserModel.prototype.save = jest.fn();
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        UserProfileService,
+        { provide: HttpService, useValue: mockHttpService },
+        { provide: getModelToken(UserProfile.name), useValue: mockUserModel },
+      ],
+    }).compile();
+
+    service = module.get<UserProfileService>(UserProfileService);
+    httpService = module.get<HttpService>(HttpService);
+    userModel = module.get(getModelToken(UserProfile.name));
+  });
+
+  it('should define service', () => {
+    expect(service).toBeDefined();
+  });
+
+  it('should create a user and strip markdown from email', async () => {
+    const result = await service.create({
+      email: '[Email](hello@example.com)',
     });
-    return created.save();
-  }
+    expect(result.email).toBe('hello@example.com');
+  });
 
-  async findAll() {
-    return this.userModel.find().exec();
-  }
+  it('should return all users using findAll()', async () => {
+    const users = await service.findAll();
+    expect(userModel.find).toHaveBeenCalled();
+    expect(users).toEqual([]);
+  });
 
-  async findByUsername(username: string) {
-    return this.userModel.findOne({ username }).exec();
-  }
+  it('should find a user by username', async () => {
+    await service.findByUsername('seun');
+    expect(userModel.findOne).toHaveBeenCalledWith({ username: 'seun' });
+  });
 
-  async updateProfile(id: string, updateData: any) {
-    const updated = await this.userModel
-      .findByIdAndUpdate(id, updateData, {
-        new: true,
-      })
-      .exec();
+  it('should update a user profile', async () => {
+    userModel.exec.mockResolvedValueOnce({
+      username: 'seun',
+      email: 'hello@example.com',
+    });
+    const updated = await service.updateProfile('id123', {
+      email: 'new@example.com',
+    });
+    expect(updated.email).toBe('hello@example.com');
+  });
 
-    if (!updated) {
-      throw new Error('Updating user profile failed: User profile not found');
-    }
-    return updated;
-  }
-
-  parseResume() {
-    return {
+  it('should parse resume correctly', () => {
+    const resume = service.parseResume();
+    expect(resume).toEqual({
       name: 'John Doe',
       email: 'john@example.com',
       linkedin_url: 'https://linkedin.com/in/johndoe',
+    });
+  });
+
+  it('should return linkedin URL', async () => {
+    const result = await service.getSocialProfileData('linkedin', 'john');
+    expect(result.linkedin_url).toBe('https://linkedin.com/in/john');
+  });
+
+  it('should fetch GitHub profile and sanitize', async () => {
+    const mockData = {
+      data: {
+        avatar_url: 'https://avatars.githubusercontent.com/u/1',
+        html_url: 'https://github.com/octocat',
+        name: '<b>Octocat</b>',
+        bio: '<script>alert("xss")</script>GitHub mascot',
+      },
     };
-  }
+    jest.spyOn(httpService, 'get').mockReturnValue(of(mockData as any));
 
-  async getSocialProfileData(platform: string, username: string) {
-    switch (platform) {
-      case 'linkedin':
-        return { linkedin_url: `https://linkedin.com/in/${username}` };
-      case 'github':
-        return this.getGitHubProfile(username);
-      default:
-        throw new Error(`Unsupported social media platform: ${platform}`);
-    }
-  }
+    const result = await service.getSocialProfileData('github', 'octocat');
+    expect(result.github_url).toBe('https://github.com/octocat');
+    expect(result.name).toBe('Octocat');
+    expect(result.bio).toBe('GitHub mascot');
+  });
 
-  private async getGitHubProfile(username: string) {
-    try {
-      const response = await firstValueFrom(
-        this.httpService.get(`https://api.github.com/users/${username}`),
-      );
+  it('should throw when GitHub API fails', async () => {
+    jest
+      .spyOn(httpService, 'get')
+      .mockReturnValue(throwError(() => new Error('Network down')));
+    await expect(
+      service.getSocialProfileData('github', 'unknown'),
+    ).rejects.toThrow('Fetching GitHub profile failed: Network down');
+  });
 
-      const data = response?.data;
-      if (!data || !data.html_url) {
-        throw new Error('Invalid response structure from GitHub API');
-      }
-
-      // sanitize fields
-      return {
-        profile_picture_url: this.stripMarkdown(data.avatar_url),
-        github_url: this.stripMarkdown(data.html_url),
-        name: this.sanitizeHtml(data.name),
-        bio: this.sanitizeHtml(data.bio),
-      };
-    } catch (err: any) {
-      const msg = err?.message?.includes('stack')
-        ? 'Fetching GitHub profile failed: Unknown network issue'
-        : `Fetching GitHub profile failed: ${err.message}`;
-      throw new Error(msg);
-    }
-  }
-
-  /** Basic HTML sanitizer */
-  private sanitizeHtml(input?: string): string {
-    if (!input) return '';
-    return input
-      .replace(/<script.*?>.*?<\/script>/gi, '')
-      .replace(/<[^>]*>?/gm, '')
-      .replace(/onerror\s*=\s*["'].*?["']/gi, '');
-  }
-
-  /** Strip Markdown `[text](link)` → `link` */
-  private stripMarkdown(text?: string): string {
-    if (!text) return '';
-    return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$2');
-  }
-}
+  it('should throw when platform is unsupported', async () => {
+    await expect(
+      service.getSocialProfileData('twitter', 'john'),
+    ).rejects.toThrow('Unsupported social media platform: twitter');
+  });
+});
