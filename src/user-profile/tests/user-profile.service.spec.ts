@@ -11,7 +11,7 @@ describe('UserProfileService', () => {
   let mockModel: jest.Mocked<Model<UserProfile>>;
   let httpService: jest.Mocked<HttpService>;
 
-  // 🔇 Suppress console noise from handleError/logging
+  // Suppress console noise from handleError/logging
   beforeAll(() => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
     jest.spyOn(console, 'log').mockImplementation(() => {});
@@ -48,7 +48,7 @@ describe('UserProfileService', () => {
       const mockData = { username: 'seun', email: 'seun@example.com' };
       const saveMock = jest.fn().mockResolvedValue({ ...mockData, _id: '1' });
 
-      // ✅ mock constructor behavior
+      // mock constructor behavior
       (mockModel as any).mockImplementation(() => ({ save: saveMock }));
 
       const result = await service.create(mockData);
