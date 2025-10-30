@@ -1,14 +1,8 @@
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { JwtPayload } from '../auth.interface';
 
-interface JwtPayload {
-  sub: string;
-  username: string;
-  githubId: string;
-  iat?: number;
-  exp?: number;
-}
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -17,24 +11,23 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call
     super({
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: jwtSecret,
-    });
+    } as any);
   }
 
   validate(payload: JwtPayload): {
     userId: string;
     username: string;
-    githubId: string;
+    githubId?: string;
   } {
-    if (!payload.sub || !payload.username) {
+    if (!payload || !payload.sub || !payload.username) {
       throw new UnauthorizedException('Invalid token payload');
     }
 
     return {
-      userId: payload.sub,
+      userId: String(payload.sub),
       username: payload.username,
       githubId: payload.githubId,
     };

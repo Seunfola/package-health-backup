@@ -416,7 +416,7 @@ export class RepoHealthService {
   async processDependencies(
     file?: Express.Multer.File,
     rawJson?: string | Record<string, unknown>,
-  ) {
+  ): Promise<ReturnType<typeof this.dependencyAnalysisService.analyzeDependencies>> {
     return this.dependencyAnalysisService.analyzeDependencies(file, rawJson);
   }
 
@@ -436,7 +436,6 @@ export class RepoHealthService {
 
   // Cache management
   async clearCache(): Promise<void> {
-    // If you're using a more sophisticated cache, implement clearing logic here
     this.logger.log(
       'Cache clear requested - implement if using external cache',
     );

@@ -1,6 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { Strategy } from 'passport-github2';
+import { GitHubValidateResult } from '../auth.interface';
+
+
 
 @Injectable()
 export class GitHubStrategy extends PassportStrategy(Strategy, 'github') {
@@ -11,7 +14,7 @@ export class GitHubStrategy extends PassportStrategy(Strategy, 'github') {
 
     if (!clientID || !clientSecret || !callbackURL) {
       throw new Error(
-        'GitHub OAuth environment variables (CLIENT_ID, CLIENT_SECRET, CALLBACK_URL) must be set',
+        'GitHub OAuth environment variables (GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_CALLBACK_URL) must be set',
       );
     }
 
@@ -21,25 +24,31 @@ export class GitHubStrategy extends PassportStrategy(Strategy, 'github') {
       clientSecret,
       callbackURL,
       scope: ['repo', 'read:user'],
-    });
+    } as any);
   }
 
   validate(
     accessToken: string,
-    refreshToken: string,
+    _refreshToken: string,
     profile: Record<string, unknown>,
-  ): { githubId: string; username: string; accessToken: string } {
+  ): GitHubValidateResult {
+    const rawId = profile?.id;
     const githubId =
-      typeof profile?.id === 'string' || typeof profile?.id === 'number'
-        ? String(profile.id)
+      typeof rawId === 'string' || typeof rawId === 'number'
+        ? String(rawId)
         : '';
+
     const username =
-      typeof profile?.username === 'string'
-        ? profile.username
-        : typeof profile?.displayName === 'string'
-          ? profile.displayName
+      typeof (profile as any).username === 'string'
+        ? (profile as any).username
+        : typeof (profile as any).displayName === 'string'
+          ? (profile as any).displayName
           : 'unknown';
 
-    return { githubId, username, accessToken };
+    return {
+      githubId,
+      username,
+      accessToken,
+    };
   }
 }
