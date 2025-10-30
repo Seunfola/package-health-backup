@@ -11,17 +11,23 @@ describe('UserProfileService', () => {
   let mockModel: jest.Mocked<Model<UserProfile>>;
   let httpService: jest.Mocked<HttpService>;
 
+  // 🔇 Suppress console noise from handleError/logging
+  beforeAll(() => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UserProfileService,
         {
           provide: getModelToken(UserProfile.name),
-          useValue: {
+          useValue: Object.assign(jest.fn(), {
             find: jest.fn().mockReturnValue({ exec: jest.fn() }),
             findOne: jest.fn().mockReturnValue({ exec: jest.fn() }),
             findByIdAndUpdate: jest.fn().mockReturnValue({ exec: jest.fn() }),
-          },
+          }),
         },
         {
           provide: HttpService,
@@ -41,6 +47,8 @@ describe('UserProfileService', () => {
     it('should create and save a new user profile', async () => {
       const mockData = { username: 'seun', email: 'seun@example.com' };
       const saveMock = jest.fn().mockResolvedValue({ ...mockData, _id: '1' });
+
+      // ✅ mock constructor behavior
       (mockModel as any).mockImplementation(() => ({ save: saveMock }));
 
       const result = await service.create(mockData);
@@ -92,7 +100,7 @@ describe('UserProfileService', () => {
       } as any);
 
       await expect(service.updateProfile('1', {})).rejects.toThrow(
-        'Updating user profile failed:',
+        /Updating user profile failed:/,
       );
     });
   });
@@ -155,7 +163,7 @@ describe('UserProfileService', () => {
       httpService.get.mockReturnValue(of({ data: null }) as any);
 
       await expect((service as any).getGitHubProfile('seun')).rejects.toThrow(
-        'Fetching GitHub profile failed:',
+        /Fetching GitHub profile failed:/,
       );
     });
 
@@ -164,7 +172,7 @@ describe('UserProfileService', () => {
         throwError(() => new Error('Network error')),
       );
       await expect((service as any).getGitHubProfile('seun')).rejects.toThrow(
-        'Fetching GitHub profile failed: Network error',
+        /Fetching GitHub profile failed: Network error/,
       );
     });
   });
