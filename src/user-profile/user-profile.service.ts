@@ -22,16 +22,20 @@ export class UserProfileService {
   ) {}
 
   async create(data: Partial<UserProfile>): Promise<UserProfile> {
-    const newUser = new this.userProfileModel(data);
-    return await newUser.save();
-  }
-
-  async findByUsername(username: string): Promise<UserProfile | null> {
-    return this.userProfileModel.findOne({ username }).exec();
+    const newUser = new this.userProfileModel({
+      ...data,
+      email: this.stripMarkdown(data.email),
+      createdAt: new Date(),
+    });
+    return newUser.save();
   }
 
   async findAll(): Promise<UserProfile[]> {
     return this.userProfileModel.find().exec();
+  }
+
+  async findByUsername(username: string): Promise<UserProfile | null> {
+    return this.userProfileModel.findOne({ username }).exec();
   }
 
   async updateProfile(
@@ -39,28 +43,22 @@ export class UserProfileService {
     profileData: Partial<UserProfile>,
   ): Promise<UserProfile> {
     try {
-      const updatedProfile = await this.userProfileModel
-        .findByIdAndUpdate(userId, profileData, {
-          new: true,
-          upsert: true,
-        })
+      const updated = await this.userProfileModel
+        .findByIdAndUpdate(userId, profileData, { new: true, upsert: true })
         .exec();
 
-      if (!updatedProfile) {
+      if (!updated)
         throw new Error('User profile not found or failed to update');
-      }
-
-      return updatedProfile;
+      return updated;
     } catch (error: unknown) {
       this.handleError('Updating user profile', error);
     }
   }
 
   parseResume(): Partial<UserProfile> {
-    console.log('Parsing resume...');
     return {
       name: 'John Doe',
-      email: 'john.doe@example.com',
+      email: 'john@example.com',
       linkedin_url: 'https://linkedin.com/in/johndoe',
     };
   }
@@ -71,10 +69,10 @@ export class UserProfileService {
   ): Promise<Partial<UserProfile>> {
     try {
       switch (platform.toLowerCase()) {
-        case 'github':
-          return this.getGitHubProfile(username);
         case 'linkedin':
           return { linkedin_url: `https://linkedin.com/in/${username}` };
+        case 'github':
+          return this.getGitHubProfile(username);
         default:
           throw new Error(`Unsupported social media platform: ${platform}`);
       }
@@ -86,38 +84,48 @@ export class UserProfileService {
   private async getGitHubProfile(
     username: string,
   ): Promise<Partial<UserProfile>> {
-    const GITHUB_API_URL = `https://api.github.com/users/${username}`;
-
     try {
       const response = await lastValueFrom(
-        this.httpService.get<GitHubApiResponse>(GITHUB_API_URL),
+        this.httpService.get<GitHubApiResponse>(
+          `https://api.github.com/users/${username}`,
+        ),
       );
 
       const data = response?.data;
-      if (!data || typeof data !== 'object') {
-        throw new Error('Invalid response structure from GitHub API');
-      }
-
-      const { avatar_url = '', html_url = '', name = '', bio = '' } = data;
+      if (!data || typeof data !== 'object' || Array.isArray(data))
+        throw new Error('Invalid response from GitHub API');
 
       return {
-        profile_picture_url: avatar_url,
-        github_url: html_url,
-        name,
-        bio,
+        profile_picture_url: this.stripMarkdown(data.avatar_url),
+        github_url: this.stripMarkdown(data.html_url),
+        name: this.sanitizeHtml(data.name),
+        bio: this.sanitizeHtml(data.bio),
       };
     } catch (error: unknown) {
       this.handleError('Fetching GitHub profile', error);
     }
   }
 
-  private handleError(context: string, error: unknown): never {
-    if (error instanceof Error) {
-      console.error(`${context} failed:`, error.message);
-      throw new Error(`${context} failed: ${error.message}`);
-    }
+  private stripMarkdown(text?: string): string {
+    if (!text) return '';
+    return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$2');
+  }
 
-    console.error(`${context} failed with unknown error:`, error);
-    throw new Error(`${context} failed with unknown error`);
+  private sanitizeHtml(input?: string): string {
+    if (!input) return '';
+    return input
+      .replace(/<script.*?>.*?<\/script>/gi, '')
+      .replace(/<[^>]*>?/gm, '')
+      .replace(/onerror\s*=\s*["'].*?["']/gi, '');
+  }
+
+  private handleError(context: string, error: unknown): never {
+    const message =
+      error instanceof Error
+        ? `${context} failed: ${error.message}`
+        : `${context} failed with unknown error`;
+
+    if (process.env.NODE_ENV !== 'test') console.error(message);
+    throw new Error(message);
   }
 }

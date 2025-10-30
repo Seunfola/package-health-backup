@@ -85,7 +85,7 @@ export class RepoHealthController {
       required: ['json'],
     },
   })
-  async analyzeDependenciesFromJson(@Body('json') json: string) {
+  async analyzeDependenciesFromJson(@Body('json') json: string): Promise<any> {
     if (!json) {
       throw new HttpException(
         'JSON content is required',
@@ -125,7 +125,9 @@ export class RepoHealthController {
       required: ['file'],
     },
   })
-  async analyzeDependenciesFromFile(@UploadedFile() file: Express.Multer.File) {
+  async analyzeDependenciesFromFile(
+    @UploadedFile() file: Express.Multer.File
+  ): Promise<any> {
     if (!file) {
       throw new HttpException('File is required', HttpStatus.BAD_REQUEST);
     }

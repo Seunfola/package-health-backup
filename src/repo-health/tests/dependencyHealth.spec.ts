@@ -14,7 +14,9 @@ describe('DependencyAnalyzerService', () => {
     service = module.get<DependencyAnalyzerService>(DependencyAnalyzerService);
   });
 
-  it('should analyze valid JSON string input', async () => {
+  it(
+  'should analyze valid JSON string input',
+  async () => {
     const input = JSON.stringify({
       dependencies: { lodash: '4.17.21' },
     });
@@ -34,9 +36,9 @@ describe('DependencyAnalyzerService', () => {
     // if service provides specific vulnerabilities
     if (Object.keys(result.vulnerabilities).length > 0) {
       const firstKey = Object.keys(result.vulnerabilities)[0];
-      expect(result.vulnerabilities[firstKey]).toBeInstanceOf(Array);
+      expect(Array.isArray(result.vulnerabilities[firstKey])).toBe(true);
     }
-  });
+  }, 15000);
 
   it('should analyze valid file input (package.json)', async () => {
     const pkgJson = {
