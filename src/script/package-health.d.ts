@@ -1,3 +1,5 @@
 import { Model } from 'mongoose';
-import { RepoHealthDocument } from '../src/repo-health/repo-health/repo-health.model';
+export interface RepoHealthDocument extends Document {
+    // Define fields as needed
+}
 export declare const createMockModel: () => Model<RepoHealthDocument>;

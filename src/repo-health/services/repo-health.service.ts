@@ -218,8 +218,6 @@ export class RepoHealthService {
     return this.analyzePrivateRepository(owner, repo, token);
   }
 
-  // ==================== DATA ACCESS METHODS ====================
-
   async findRepoHealth(
     owner: string,
     repo: string,
