@@ -1,124 +1,116 @@
-#!/usr/bin/env node
+import { execSync } from 'child_process';
+import { existsSync, readFileSync, unlinkSync, readdirSync } from 'fs';
+import { join } from 'path';
 
-const { execSync } = require('child_process');
-const { existsSync, readFileSync, unlinkSync, readdirSync } = require('fs');
-const { join } = require('path');
+// Increase timeout for CLI tests
+jest.setTimeout(30000);
 
-console.log('🧪 Testing Package Health CLI...\n');
-
-// Find and clean up previous report files
 function cleanupReportFiles() {
   const files = readdirSync('.');
   files.forEach((file) => {
     if (file.startsWith('health-report-') && file.endsWith('.json')) {
       unlinkSync(file);
-      console.log(`🧹 Cleaned up: ${file}`);
     }
   });
 }
 
-// Test cases
-const tests = [
-  {
-    name: 'Help command',
-    command: 'npx ts-node src/script/package-health.ts --help',
-    shouldPass: true,
-  },
-  {
-    name: 'Missing URL parameter',
-    command: 'npx ts-node src/script/package-health.ts analyze',
-    shouldPass: false,
-    expectedError: 'Not enough non-option arguments',
-  },
-  {
-    name: 'Invalid URL format',
-    command: 'npx ts-node src/script/package-health.ts analyze invalid-url',
-    shouldPass: false,
-    expectedError: 'Invalid GitHub URL format',
-  },
-  {
-    name: 'Valid GitHub URL analysis',
-    command:
-      'npx ts-node src/script/package-health.ts analyze https://github.com/octocat/Hello-World',
-    shouldPass: true,
-  },
-];
+describe('Package Health CLI Integration', () => {
+  beforeEach(() => {
+    cleanupReportFiles();
+  });
 
-cleanupReportFiles();
+  afterAll(() => {
+    cleanupReportFiles();
+  });
 
-let allTestsPassed = true;
-let reportFile = '';
+  describe('CLI Command Validation', () => {
+    it('should display help information when --help flag is used', () => {
+      const output = execSync(
+        'npx ts-node src/script/package-health.ts --help',
+        {
+          encoding: 'utf-8',
+        },
+      );
 
-tests.forEach((test, index) => {
-  console.log(`\n${index + 1}. ${test.name}`);
-  console.log(`   Command: ${test.command}`);
-
-  try {
-    const output = execSync(test.command, {
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 30000, // 30 second timeout
+      expect(output).toMatch(/Analyze a GitHub repository/);
+      expect(output).toMatch(/--help/);
+      expect(output).toMatch(/Commands:/);
     });
 
-    if (test.shouldPass) {
-      console.log('   ✅ PASS: Command succeeded');
+    it('should fail when no URL is provided', () => {
+      try {
+        execSync('npx ts-node src/script/package-health.ts analyze', {
+          encoding: 'utf-8',
+        });
+        fail('Expected command to fail');
+      } catch (err: any) {
+        const output = err.stderr || err.stdout || err.message;
+        // Accept either error message
+        expect(output).toMatch(
+          /Not enough non-option arguments|URL is required/,
+        );
+      }
+    });
 
-      // Check for report file creation
+    it('should fail with invalid URL format', () => {
+      try {
+        execSync(
+          'npx ts-node src/script/package-health.ts analyze invalid-url',
+          {
+            encoding: 'utf-8',
+          },
+        );
+        fail('Expected command to fail');
+      } catch (err: any) {
+        const output = err.stderr || err.stdout || err.message;
+        expect(output).toMatch(/Invalid GitHub URL format/);
+      }
+    });
+  });
+
+  describe('CLI Analysis Functionality', () => {
+    it('should generate health report for valid GitHub repository', () => {
+      // Use a small, fast repository for testing
+      const output = execSync(
+        'npx ts-node src/script/package-health.ts analyze https://github.com/octocat/Hello-World',
+        { encoding: 'utf-8' },
+      );
+
+      // Check console output
+      expect(output).toMatch(/Starting analysis for octocat\/Hello-World/);
+      expect(output).toMatch(/Analysis Complete/);
+      expect(output).toMatch(/Report saved to/);
+
+      // Check if report file was created
       const files = readdirSync('.');
       const reportFiles = files.filter(
         (f) => f.startsWith('health-report-') && f.endsWith('.json'),
       );
+      expect(reportFiles.length).toBeGreaterThan(0);
 
-      if (reportFiles.length > 0 && !reportFile) {
-        reportFile = reportFiles[0];
-        const report = JSON.parse(readFileSync(reportFile, 'utf-8'));
-        console.log(`   📊 Report: ${report.owner}/${report.repo}`);
-        console.log(`   🏆 Score: ${report.overall_health?.score}/100`);
+      if (reportFiles.length > 0) {
+        // Check report content
+        const report = JSON.parse(readFileSync(reportFiles[0], 'utf-8'));
+        expect(report.owner).toBe('octocat');
+        expect(report.repo).toBe('Hello-World');
+        expect(report.overall_health).toBeDefined();
+        expect(report.dependency_health).toBeDefined();
       }
-    } else {
-      console.log('   ❌ FAIL: Expected command to fail but it succeeded');
-      allTestsPassed = false;
-    }
-  } catch (error: unknown) {
-    let errorOutput = '';
-    if (typeof error === 'object' && error !== null) {
-      if ('stderr' in error && typeof (error as any).stderr === 'string') {
-        errorOutput = (error as any).stderr;
-      } else if ('stdout' in error && typeof (error as any).stdout === 'string') {
-        errorOutput = (error as any).stdout;
-      } else if ('message' in error && typeof (error as any).message === 'string') {
-        errorOutput = (error as any).message;
-      }
-    } else if (typeof error === 'string') {
-      errorOutput = error;
-    }
+    });
 
-    if (!test.shouldPass) {
-      if (test.expectedError && errorOutput.includes(test.expectedError)) {
-        console.log(`   ✅ PASS: Correctly failed with expected error`);
-      } else if (
-        errorOutput.includes('URL is required') ||
-        errorOutput.includes('Invalid GitHub URL format')
-      ) {
-        console.log(`   ✅ PASS: Correctly failed with validation error`);
-      } else {
-        console.log(`   ✅ PASS: Command failed as expected`);
-      }
-    } else {
-      console.log(`   ❌ FAIL: Command failed unexpectedly`);
-      console.log(`   Error: ${errorOutput.substring(0, 200)}...`);
-      allTestsPassed = false;
-    }
-  }
+    it('should accept GitHub token via --token flag', () => {
+      const output = execSync(
+        'npx ts-node src/script/package-health.ts analyze https://github.com/octocat/Hello-World --token=test-token-123',
+        { encoding: 'utf-8' },
+      );
+
+      expect(output).toMatch(/Starting analysis for octocat\/Hello-World/);
+
+      const files = readdirSync('.');
+      const reportFiles = files.filter(
+        (f) => f.startsWith('health-report-') && f.endsWith('.json'),
+      );
+      expect(reportFiles.length).toBeGreaterThan(0);
+    });
+  });
 });
-
-// Final cleanup
-cleanupReportFiles();
-
-console.log('\n' + '='.repeat(50));
-console.log(
-  allTestsPassed ? '✨ All CLI tests passed!' : '❌ Some tests failed',
-);
-console.log('='.repeat(50));
-
-process.exit(allTestsPassed ? 0 : 1);
