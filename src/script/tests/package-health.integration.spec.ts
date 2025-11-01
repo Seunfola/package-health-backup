@@ -1,124 +1,99 @@
-import { of } from 'rxjs';
-import { RepoHealthService } from 'src/repo-health/services/repo-health.service';
-import { DependencyAnalysisService } from 'src/repo-health/services/dependency-analysis.service';
-import { GithubApiService } from 'src/repo-health/services/github-api.service';
-import { RepoHealthDocument } from 'src/repo-health/repo-health.model';
+// src/script/tests/package-health.integration.spec.ts
+import { execSync } from 'child_process';
+import { existsSync, readFileSync, unlinkSync, readdirSync } from 'fs';
 
-
-const createMockModel = (): any => ({
-  findOne: jest.fn().mockReturnValue({
-    exec: jest.fn().mockResolvedValue(null),
-    lean: jest.fn().mockReturnThis(),
-  }),
-  create: jest.fn().mockResolvedValue({
-    owner: 'octocat',
-    repo: 'Hello-World',
-    dependency_health: 95,
-    overall_health: { score: 95, label: 'Good' },
-  }),
-  findOneAndUpdate: jest.fn().mockReturnValue({
-    exec: jest.fn().mockResolvedValue({
-      owner: 'octocat',
-      repo: 'Hello-World',
-      dependency_health: 95,
-      overall_health: { score: 95, label: 'Good' },
-    }),
-  }),
-});
-
-
-const createMockGithubApiService = (): GithubApiService => {
-  return {
-    // Required properties/methods
-    getRepoStars: jest.fn().mockResolvedValue(5),
-    getRepoOpenIssues: jest.fn().mockResolvedValue(1),
-    getRepoContributors: jest.fn().mockResolvedValue([]),
-    getRepoLastPushDate: jest.fn().mockResolvedValue(new Date().toISOString()),
-    getPackageJson: jest.fn().mockResolvedValue({}),
-    getRepoLanguages: jest.fn().mockResolvedValue({}),
-    getRepo: jest.fn().mockResolvedValue({}),
-    getRepoCommits: jest.fn().mockResolvedValue([]),
-    getLatestRelease: jest.fn().mockResolvedValue({}),
-    getRepoReadme: jest.fn().mockResolvedValue(''),
-    fetchFromGithubApi: jest.fn().mockResolvedValue({}),
-    determineRepoVisibility: jest.fn().mockResolvedValue('public'),
-
-    // Optional internal helpers
-    BASE_URL: 'https://api.github.com',
-    CACHE_TTL: 60,
-  } as unknown as GithubApiService;
-};
-
-
-const createMockDependencyAnalysisService = (): DependencyAnalysisService => {
-  return {
-    analyzeDependencies: jest.fn().mockResolvedValue({
-      dependencyHealth: 95,
-      riskyDependencies: [],
-      bundleSize: 0,
-      licenseRisks: [],
-      popularity: 80,
-      daysBehind: 10,
-    }),
-  } as unknown as DependencyAnalysisService;
-};
-
-
-describe('Package Health Integration', () => {
-  let service: RepoHealthService;
+describe('Package Health CLI Integration', () => {
+  function cleanupReportFiles() {
+    const files = readdirSync('.');
+    files.forEach((file) => {
+      if (file.startsWith('health-report-') && file.endsWith('.json')) {
+        unlinkSync(file);
+      }
+    });
+  }
 
   beforeEach(() => {
-    const mockGithubApiService = createMockGithubApiService();
-    const mockDependencyService = createMockDependencyAnalysisService();
-    const mockModel = createMockModel();
-
-    // Construct with correct argument order (matches RepoHealthService)
-    service = new RepoHealthService(
-      mockGithubApiService,
-      mockDependencyService,
-      {
-        // Minimal mock HealthCalculatorService
-        calculateOverallHealth: jest.fn().mockReturnValue({
-          score: 95,
-          label: 'Excellent',
-        }),
-      } as any,
-      {
-        // Minimal mock RepositoryDataService
-        saveRepoData: jest.fn().mockResolvedValue({}),
-      } as any,
-    );
+    cleanupReportFiles();
   });
 
-  it('should analyze a GitHub repository successfully', async () => {
-    const result = await service.analyzeRepositoryAuto(
-      'octocat',
-      'Hello-World',
-    );
-
-    expect(result).toHaveProperty('owner', 'octocat');
-    expect(result).toHaveProperty('repo', 'Hello-World');
-    expect(result).toHaveProperty('overall_health');
-    expect(result.dependency_health).toBe(95);
+  afterAll(() => {
+    cleanupReportFiles();
   });
 
-  it('should handle errors gracefully', async () => {
-    const mockGithubApiService = createMockGithubApiService();
-    // Make sure getRepoStars exists as a jest function (fix type issue)
-    (mockGithubApiService as any).getRepoStars = jest.fn().mockRejectedValueOnce(
-      new Error('Network error'),
+  it('should display help information', () => {
+    const output = execSync('npx ts-node src/script/package-health.ts --help', {
+      encoding: 'utf-8',
+    });
+
+    expect(output).toMatch(/Analyze a GitHub repository/);
+    expect(output).toMatch(/--help/);
+    expect(output).toMatch(/Commands:/);
+  });
+
+  it('should fail when no URL is provided', () => {
+    try {
+      execSync('npx ts-node src/script/package-health.ts analyze', {
+        encoding: 'utf-8',
+      });
+      fail('Expected command to fail');
+    } catch (err: any) {
+      const output = err.stderr || err.stdout || err.message;
+      expect(output).toMatch(/Not enough non-option arguments|URL is required/);
+    }
+  });
+
+  it('should fail with invalid URL format', () => {
+    try {
+      execSync('npx ts-node src/script/package-health.ts analyze invalid-url', {
+        encoding: 'utf-8',
+      });
+      fail('Expected command to fail');
+    } catch (err: any) {
+      const output = err.stderr || err.stdout || err.message;
+      expect(output).toMatch(/Invalid GitHub URL format/);
+    }
+  });
+
+  it('should generate health report for valid GitHub repository', () => {
+    const output = execSync(
+      'npx ts-node src/script/package-health.ts analyze https://github.com/octocat/Hello-World',
+      { encoding: 'utf-8', timeout: 30000 },
     );
 
-    // Recreate service with failing GitHub mock
-    service = new RepoHealthService(
-      mockGithubApiService,
-      createMockDependencyAnalysisService(),
-      { calculateOverallHealth: jest.fn() } as any,
-      { saveRepoData: jest.fn() } as any,
+    // Check console output
+    expect(output).toMatch(/Starting analysis for octocat\/Hello-World/);
+    expect(output).toMatch(/Analysis Complete/);
+    expect(output).toMatch(/Report saved to/);
+
+    // Check if report file was created
+    const files = readdirSync('.');
+    const reportFiles = files.filter(
+      (f) => f.startsWith('health-report-') && f.endsWith('.json'),
+    );
+    expect(reportFiles.length).toBeGreaterThan(0);
+
+    // Check report content
+    const report = JSON.parse(readFileSync(reportFiles[0], 'utf-8'));
+    expect(report.owner).toBe('octocat');
+    expect(report.repo).toBe('Hello-World');
+    expect(report.overall_health).toBeDefined();
+    expect(report.dependency_health).toBeDefined();
+    expect(typeof report.overall_health.score).toBe('number');
+    expect(typeof report.dependency_health).toBe('number');
+  });
+
+  it('should accept GitHub token via --token flag', () => {
+    const output = execSync(
+      'npx ts-node src/script/package-health.ts analyze https://github.com/octocat/Hello-World --token=test-token-123',
+      { encoding: 'utf-8', timeout: 30000 },
     );
 
-    await expect(
-      service.analyzeRepositoryAuto('octocat', 'Hello-World'),
-    ).rejects.toThrow('Network error');
+    expect(output).toMatch(/Starting analysis for octocat\/Hello-World/);
+
+    const files = readdirSync('.');
+    const reportFiles = files.filter(
+      (f) => f.startsWith('health-report-') && f.endsWith('.json'),
+    );
+    expect(reportFiles.length).toBeGreaterThan(0);
   });
 });
