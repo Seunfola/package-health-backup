@@ -138,6 +138,7 @@ export interface DependencyAnalysisResult {
   licenseRisks: string[];
   popularity: number;
   daysBehind: number;
+  dependencies?: string[];
 }
 
 export interface CacheEntry<T> {
