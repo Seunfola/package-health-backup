@@ -37,9 +37,9 @@ tests.forEach((test, index) => {
   try {
     const output = execSync(test.command, { 
       encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 30000  // 30 second timeout
+    });    
     if (test.shouldPass) {
       console.log('   ✅ PASS\n');
       passed++;

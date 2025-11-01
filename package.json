@@ -19,7 +19,7 @@
     "cli:test": "npm run build && npm run cli analyze",
     "cli:test:dev": "npm run cli:dev analyze",
     "cli:demo": "npm run cli:dev analyze https://github.com/octocat/Hello-World",
-    "cli:report": "npm run cli:dev analyze https://github.com/octocat/Hello-World && cat health-report.json"
+    "cli:report": "npm run cli:dev analyze https://github.com/octocat/Hello-World && node -e \"console.log(require('fs').readFileSync('health-report.json', 'utf8'))\""
   },
   "bin": {
     "package-health": "./dist/script/package-health.js"

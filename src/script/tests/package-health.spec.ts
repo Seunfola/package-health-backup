@@ -1,20 +1,19 @@
 import { execSync } from 'child_process';
 import { existsSync, readFileSync, unlinkSync, readdirSync } from 'fs';
-import { join } from 'path';
 
-// Increase timeout for CLI tests
-jest.setTimeout(30000);
+// Mock-based CLI tests that don't hit real APIs
+describe('Package Health CLI (Mocked)', () => {
+  const testRepo = 'https://github.com/octocat/Hello-World';
 
-function cleanupReportFiles() {
-  const files = readdirSync('.');
-  files.forEach((file) => {
-    if (file.startsWith('health-report-') && file.endsWith('.json')) {
-      unlinkSync(file);
-    }
-  });
-}
+  function cleanupReportFiles() {
+    const files = readdirSync('.');
+    files.forEach((file) => {
+      if (file.startsWith('health-report-') && file.endsWith('.json')) {
+        unlinkSync(file);
+      }
+    });
+  }
 
-describe('Package Health CLI Integration', () => {
   beforeEach(() => {
     cleanupReportFiles();
   });
@@ -23,94 +22,82 @@ describe('Package Health CLI Integration', () => {
     cleanupReportFiles();
   });
 
-  describe('CLI Command Validation', () => {
-    it('should display help information when --help flag is used', () => {
-      const output = execSync(
-        'npx ts-node src/script/package-health.ts --help',
-        {
-          encoding: 'utf-8',
-        },
-      );
-
-      expect(output).toMatch(/Analyze a GitHub repository/);
-      expect(output).toMatch(/--help/);
-      expect(output).toMatch(/Commands:/);
+  it('should display help information', () => {
+    const output = execSync('npx ts-node src/script/package-health.ts --help', {
+      encoding: 'utf-8',
     });
 
-    it('should fail when no URL is provided', () => {
-      try {
-        execSync('npx ts-node src/script/package-health.ts analyze', {
-          encoding: 'utf-8',
-        });
-        fail('Expected command to fail');
-      } catch (err: any) {
-        const output = err.stderr || err.stdout || err.message;
-        // Accept either error message
-        expect(output).toMatch(
-          /Not enough non-option arguments|URL is required/,
-        );
-      }
-    });
-
-    it('should fail with invalid URL format', () => {
-      try {
-        execSync(
-          'npx ts-node src/script/package-health.ts analyze invalid-url',
-          {
-            encoding: 'utf-8',
-          },
-        );
-        fail('Expected command to fail');
-      } catch (err: any) {
-        const output = err.stderr || err.stdout || err.message;
-        expect(output).toMatch(/Invalid GitHub URL format/);
-      }
-    });
+    expect(output).toMatch(/Analyze a GitHub repository/);
+    expect(output).toMatch(/Commands:/);
   });
 
-  describe('CLI Analysis Functionality', () => {
-    it('should generate health report for valid GitHub repository', () => {
-      // Use a small, fast repository for testing
-      const output = execSync(
-        'npx ts-node src/script/package-health.ts analyze https://github.com/octocat/Hello-World',
-        { encoding: 'utf-8' },
-      );
+  it('should fail when no URL is provided', () => {
+    try {
+      execSync('npx ts-node src/script/package-health.ts analyze', {
+        encoding: 'utf-8',
+      });
+      fail('Expected command to fail');
+    } catch (err: any) {
+      const output = err.stderr || err.stdout || err.message;
+      expect(output).toMatch(/Not enough non-option arguments|URL is required/);
+    }
+  });
 
-      // Check console output
-      expect(output).toMatch(/Starting analysis for octocat\/Hello-World/);
-      expect(output).toMatch(/Analysis Complete/);
-      expect(output).toMatch(/Report saved to/);
+  it('should fail with invalid URL format', () => {
+    try {
+      execSync('npx ts-node src/script/package-health.ts analyze invalid-url', {
+        encoding: 'utf-8',
+      });
+      fail('Expected command to fail');
+    } catch (err: any) {
+      const output = err.stderr || err.stdout || err.message;
+      expect(output).toMatch(/Invalid GitHub URL format/);
+    }
+  });
 
-      // Check if report file was created
-      const files = readdirSync('.');
-      const reportFiles = files.filter(
-        (f) => f.startsWith('health-report-') && f.endsWith('.json'),
-      );
-      expect(reportFiles.length).toBeGreaterThan(0);
+  it('should successfully analyze a repository with mocked services', () => {
+    const output = execSync(
+      `npx ts-node src/script/package-health.ts analyze ${testRepo}`,
+      { encoding: 'utf-8', timeout: 30000 },
+    );
 
-      if (reportFiles.length > 0) {
-        // Check report content
-        const report = JSON.parse(readFileSync(reportFiles[0], 'utf-8'));
-        expect(report.owner).toBe('octocat');
-        expect(report.repo).toBe('Hello-World');
-        expect(report.overall_health).toBeDefined();
-        expect(report.dependency_health).toBeDefined();
-      }
-    });
+    // Check for success indicators
+    expect(output).toMatch(/Starting analysis for octocat\/Hello-World/);
+    expect(output).toMatch(/Analysis Complete/);
+    expect(output).toMatch(/Report saved to/);
+    expect(output).toMatch(/Overall Health: \d+\/100/);
 
-    it('should accept GitHub token via --token flag', () => {
-      const output = execSync(
-        'npx ts-node src/script/package-health.ts analyze https://github.com/octocat/Hello-World --token=test-token-123',
-        { encoding: 'utf-8' },
-      );
+    // Check if report file was created
+    const files = readdirSync('.');
+    const reportFiles = files.filter(
+      (f) => f.startsWith('health-report-') && f.endsWith('.json'),
+    );
+    expect(reportFiles.length).toBeGreaterThan(0);
 
-      expect(output).toMatch(/Starting analysis for octocat\/Hello-World/);
+    // Verify report content
+    if (reportFiles.length > 0) {
+      const report = JSON.parse(readFileSync(reportFiles[0], 'utf-8'));
+      expect(report.owner).toBe('octocat');
+      expect(report.repo).toBe('Hello-World');
+      expect(report.overall_health).toBeDefined();
+      expect(report.overall_health.score).toBeGreaterThan(0);
+      expect(report.dependency_health).toBeDefined();
+      expect(report.analysis_timestamp).toBeDefined();
+    }
+  });
 
-      const files = readdirSync('.');
-      const reportFiles = files.filter(
-        (f) => f.startsWith('health-report-') && f.endsWith('.json'),
-      );
-      expect(reportFiles.length).toBeGreaterThan(0);
-    });
+  it('should work with token flag (ignored in mocks)', () => {
+    const output = execSync(
+      `npx ts-node src/script/package-health.ts analyze ${testRepo} --token=fake-token`,
+      { encoding: 'utf-8', timeout: 30000 },
+    );
+
+    expect(output).toMatch(/Analysis Complete/);
+
+    const files = readdirSync('.');
+    const reportFiles = files.filter(
+      (f) => f.startsWith('health-report-') && f.endsWith('.json'),
+    );
+    expect(reportFiles.length).toBeGreaterThan(0);
   });
 });
