@@ -15,9 +15,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "clean": "rimraf dist tmp",
     "cli": "node dist/script/package-health.js",
-    "cli:dev": "ts-node src/script/package-health.ts",
-    "cli:test": "npm run build && npm run cli analyze",
-    "cli:test:dev": "npm run cli:dev analyze",
+    "cli:test": "npm run build && npm run cli analyze https://github.com/octocat/Hello-World",
+    "cli:test:dev": "npm run cli:dev analyze https://github.com/octocat/Hello-World",
     "cli:demo": "npm run cli:dev analyze https://github.com/octocat/Hello-World",
     "cli:report": "npm run cli:dev analyze https://github.com/octocat/Hello-World && node -e \"console.log(require('fs').readFileSync('health-report.json', 'utf8'))\""
   },
